@@ -47,8 +47,16 @@ python download-insta-tab/server.py \
   --sessionid <YOUR_SESSIONID> \
   --csrftoken <YOUR_CSRFTOKEN> \
   --output ~/Downloads \
-  --port 7432
+  --port 7432 \
+  --filename-pattern "{date}_{owner_username}_{shortcode}"
 ```
+
+**Filename pattern** — customize how files are named:
+| Pattern | Result |
+|---|---|
+| `{date}_{owner_username}_{shortcode}` | `2024-01-15_natgeo_AbCdEfG.jpg` (default) |
+| `{owner_username}_{shortcode}` | `natgeo_AbCdEfG.jpg` |
+| `{shortcode}` | `AbCdEfG.jpg` |
 
 The server will verify your credentials and display:
 ```

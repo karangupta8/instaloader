@@ -32,6 +32,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import instaloader
 from websockets.asyncio.server import serve as ws_serve
 
+import carousel_processor
+
 # ── Globals set once at startup ─────────────────────────────────────────────
 
 _loader: instaloader.Instaloader | None = None
@@ -62,6 +64,20 @@ def _authenticate(sessionid: str, csrftoken: str) -> str:
     return test_user
 
 
+# ── Carousel post-processing ───────────────────────────────────────────────
+
+def _maybe_process_carousel(post, target_dir: Path) -> None:
+    """Non-fatal carousel post-processing step."""
+    try:
+        result = carousel_processor.process_carousel(post, target_dir)
+        if result:
+            print(f"  Carousel: {result.name}")
+    except carousel_processor.CarouselProcessingError as exc:
+        print(f"  [carousel] WARNING: {exc}", file=sys.stderr)
+    except Exception as exc:
+        print(f"  [carousel] Unexpected error: {exc}", file=sys.stderr)
+
+
 # ── Download handlers ────────────────────────────────────────────────────────
 
 def _handle_profile(identifier: str, count: int) -> dict:
@@ -75,6 +91,7 @@ def _handle_profile(identifier: str, count: int) -> dict:
         downloaded += 1
         print(f"  [{downloaded}/{actual}] {post.shortcode}", end="  ")
         _loader.download_post(post, target=target)
+        _maybe_process_carousel(post, Path(target))
         print()
     return {"downloaded": downloaded, "target": target}
 
@@ -88,6 +105,7 @@ def _handle_saved(count: int) -> dict:
         downloaded += 1
         print(f"  [{downloaded}] {post.shortcode}", end="  ")
         _loader.download_post(post, target=target)
+        _maybe_process_carousel(post, Path(target))
         print()
     return {"downloaded": downloaded, "target": target}
 
@@ -102,6 +120,7 @@ def _handle_hashtag(identifier: str, count: int) -> dict:
         downloaded += 1
         print(f"  [{downloaded}/{count}] {post.shortcode}", end="  ")
         _loader.download_post(post, target=target)
+        _maybe_process_carousel(post, Path(target))
         print()
     return {"downloaded": downloaded, "target": target}
 
@@ -111,6 +130,7 @@ def _handle_post(identifier: str) -> dict:
     target = str(_output_dir / post.owner_username)
     print(f"  Post    : {identifier}  ({post.typename})")
     _loader.download_post(post, target=target)
+    _maybe_process_carousel(post, Path(target))
     return {"downloaded": 1, "target": target}
 
 
@@ -197,12 +217,16 @@ def main():
                         help="Root directory for downloads (default: current dir)")
     parser.add_argument("--port", "-p", type=int, default=7432,
                         help="Port to listen on (default: 7432)")
+    parser.add_argument("--filename-pattern", default="{date}_{owner_username}_{shortcode}",
+                        help="Filename pattern for downloads (default: {date}_{owner_username}_{shortcode}). "
+                             "Available: {date}, {owner_username}, {shortcode}, etc.")
     args = parser.parse_args()
 
-    _output_dir = Path(args.output).resolve()
+    _output_dir = Path(args.output).expanduser().resolve()
     _output_dir.mkdir(parents=True, exist_ok=True)
 
     _loader = instaloader.Instaloader(
+        filename_pattern=args.filename_pattern,
         download_video_thumbnails=False,
         save_metadata=False,
     )
