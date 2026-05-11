@@ -1,63 +1,90 @@
 #!/usr/bin/env python3
 """
-ig-dl local server — bridges your browser to instaloader.
+download-insta-tab server — bridges your browser to instaloader via WebSocket.
 
-Run once, leave it running, then paste console.js into any Instagram page.
+Instagram's CSP blocks HTTP/HTTPS to localhost but allows ws://localhost:*.
+This server uses WebSocket so console.js can communicate from an Instagram tab.
 
 Usage:
-    python ig-dl/server.py [options]
+    python download-insta-tab/server.py [options]
 
 Options:
-    --browser   Browser to pull session from (default: chrome)
     --output    Directory to save downloads into (default: current dir)
     --port      Port to listen on (default: 7432)
 """
 
 import argparse
+import asyncio
+import http
 import itertools
 import json
+import logging
 import sys
 import traceback
-from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
+
+# Suppress "opening handshake failed" noise from browsers probing the port
+logging.getLogger("websockets").setLevel(logging.CRITICAL)
 
 # Import from parent instaloader package without modifying it
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import instaloader
-from instaloader.__main__ import import_session
+from websockets.asyncio.server import serve as ws_serve
 
 # ── Globals set once at startup ─────────────────────────────────────────────
 
 _loader: instaloader.Instaloader | None = None
 _output_dir: Path = Path(".")
+_authenticated: bool = False
 
 
-# ── Page-type handlers ───────────────────────────────────────────────────────
+# ── Session management ───────────────────────────────────────────────────────
+
+def _authenticate(sessionid: str, csrftoken: str) -> str:
+    """Build an instaloader session from cookie values."""
+    global _authenticated
+
+    cookies = {
+        "sessionid": sessionid,
+        "csrftoken": csrftoken,
+    }
+
+    _loader.context.load_session("unknown", cookies)
+
+    test_user = _loader.test_login()
+    if not test_user:
+        raise ValueError("Session cookies are invalid or expired. Re-copy from DevTools and try again.")
+
+    _loader.context.username = test_user
+    _authenticated = True
+    print(f"[ig-dl] Authenticated as @{test_user}")
+    return test_user
+
+
+# ── Download handlers ────────────────────────────────────────────────────────
 
 def _handle_profile(identifier: str, count: int) -> dict:
-    """Download top N posts from a public or followed private profile."""
     profile = instaloader.Profile.from_username(_loader.context, identifier)
     actual = min(count, profile.mediacount)
+    target = str(_output_dir / profile.username)
     print(f"  Profile : {profile.full_name} (@{profile.username}), {profile.mediacount} posts")
-    print(f"  Target  : {_output_dir / profile.username}  ({actual} posts)")
+    print(f"  Target  : {target}  ({actual} posts)")
     downloaded = 0
     for post in itertools.islice(profile.get_posts(), actual):
         downloaded += 1
         print(f"  [{downloaded}/{actual}] {post.shortcode}", end="  ")
-        _loader.download_post(post, target=str(_output_dir / profile.username))
+        _loader.download_post(post, target=target)
         print()
-    return {"downloaded": downloaded, "target": str(_output_dir / profile.username)}
+    return {"downloaded": downloaded, "target": target}
 
 
 def _handle_saved(count: int) -> dict:
-    """Download top N posts from your own saved collection."""
     profile = instaloader.Profile.own_profile(_loader.context)
-    print(f"  Saved posts for @{profile.username}")
     target = str(_output_dir / ":saved")
+    print(f"  Saved posts for @{profile.username}")
     downloaded = 0
-    posts = profile.get_saved_posts()
-    for post in itertools.islice(posts, count):
+    for post in itertools.islice(profile.get_saved_posts(), count):
         downloaded += 1
         print(f"  [{downloaded}] {post.shortcode}", end="  ")
         _loader.download_post(post, target=target)
@@ -66,12 +93,10 @@ def _handle_saved(count: int) -> dict:
 
 
 def _handle_hashtag(identifier: str, count: int) -> dict:
-    """Download top N posts from a hashtag page."""
     tag = identifier.lstrip("#")
     hashtag = instaloader.Hashtag.from_name(_loader.context, tag)
     target = str(_output_dir / f"#{tag}")
-    print(f"  Hashtag : #{tag}")
-    print(f"  Target  : {target}")
+    print(f"  Hashtag : #{tag}  →  {target}")
     downloaded = 0
     for post in itertools.islice(hashtag.get_posts(), count):
         downloaded += 1
@@ -82,15 +107,12 @@ def _handle_hashtag(identifier: str, count: int) -> dict:
 
 
 def _handle_post(identifier: str) -> dict:
-    """Download a single post by shortcode."""
     post = instaloader.Post.from_shortcode(_loader.context, identifier)
     target = str(_output_dir / post.owner_username)
     print(f"  Post    : {identifier}  ({post.typename})")
     _loader.download_post(post, target=target)
     return {"downloaded": 1, "target": target}
 
-
-# ── HTTP handler ─────────────────────────────────────────────────────────────
 
 ROUTES = {
     "profile":  lambda d, n: _handle_profile(d["identifier"], n),
@@ -100,65 +122,57 @@ ROUTES = {
 }
 
 
-class Handler(BaseHTTPRequestHandler):
-    def log_message(self, fmt, *args):  # suppress default access log
-        pass
+# ── WebSocket handler ────────────────────────────────────────────────────────
 
-    def _cors(self):
-        self.send_header("Access-Control-Allow-Origin", "*")
-        self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
-        self.send_header("Access-Control-Allow-Headers", "Content-Type")
+async def handle_client(websocket):
+    async def send(payload: dict):
+        await websocket.send(json.dumps(payload))
 
-    def do_OPTIONS(self):
-        self.send_response(204)
-        self._cors()
-        self.end_headers()
+    # Send initial status
+    await send({
+        "type": "status",
+        "authenticated": _authenticated,
+        "logged_in_as": _loader.context.username if _authenticated else None,
+        "output": str(_output_dir.resolve()),
+    })
 
-    def do_GET(self):
-        if self.path == "/status":
-            username = _loader.context.username if _loader else None
-            self._respond(200, {"ok": True, "logged_in_as": username, "output": str(_output_dir.resolve())})
+    async for raw in websocket:
+        try:
+            msg = json.loads(raw)
+        except json.JSONDecodeError:
+            await send({"type": "error", "error": "Invalid JSON"})
+            continue
+
+        msg_type = msg.get("type")
+
+        # ── Download ──────────────────────────────────────────────────────────
+        if msg_type == "download":
+            if not _authenticated:
+                await send({"type": "error", "error": "Not authenticated. Call igdl() from an Instagram page."})
+                continue
+
+            page_type = msg.get("page_type")
+            count = int(msg.get("count", 10))
+
+            if page_type not in ROUTES:
+                await send({"type": "error", "error": f"Unknown page type: {page_type!r}"})
+                continue
+
+            print(f"\n[ig-dl] {page_type.upper()}"
+                  + (f" → {msg.get('identifier')}" if msg.get("identifier") else "")
+                  + f"  (count={count})")
+
+            try:
+                result = await asyncio.get_event_loop().run_in_executor(
+                    None, lambda: ROUTES[page_type](msg, count)
+                )
+                await send({"type": "done", **result})
+            except Exception as exc:
+                traceback.print_exc()
+                await send({"type": "error", "error": str(exc)})
+
         else:
-            self._respond(404, {"error": "Not found"})
-
-    def do_POST(self):
-        if self.path != "/download":
-            self._respond(404, {"error": "Not found"})
-            return
-
-        try:
-            length = int(self.headers.get("Content-Length", 0))
-            body = json.loads(self.rfile.read(length))
-        except Exception:
-            self._respond(400, {"error": "Invalid JSON body"})
-            return
-
-        page_type = body.get("type")
-        count = int(body.get("count", 10))
-
-        if page_type not in ROUTES:
-            self._respond(400, {"error": f"Unknown page type: {page_type!r}. Supported: {list(ROUTES)}"})
-            return
-
-        print(f"\n[ig-dl] {page_type.upper()}"
-              + (f" → {body.get('identifier')}" if body.get("identifier") else "")
-              + f"  (count={count})")
-
-        try:
-            result = ROUTES[page_type](body, count)
-            self._respond(200, {"ok": True, **result})
-        except Exception as exc:
-            traceback.print_exc()
-            self._respond(500, {"error": str(exc)})
-
-    def _respond(self, status: int, payload: dict):
-        data = json.dumps(payload).encode()
-        self.send_response(status)
-        self._cors()
-        self.send_header("Content-Type", "application/json")
-        self.send_header("Content-Length", str(len(data)))
-        self.end_headers()
-        self.wfile.write(data)
+            await send({"type": "error", "error": f"Unknown message type: {msg_type!r}"})
 
 
 # ── Entry point ───────────────────────────────────────────────────────────────
@@ -166,11 +180,19 @@ class Handler(BaseHTTPRequestHandler):
 def main():
     global _loader, _output_dir
 
-    parser = argparse.ArgumentParser(description="ig-dl local server")
-    parser.add_argument("--browser", "-b", default="chrome",
-                        choices=["brave", "chrome", "chromium", "edge", "firefox", "librewolf",
-                                 "opera", "opera_gx", "safari", "vivaldi"],
-                        help="Browser to pull Instagram session from (default: chrome)")
+    parser = argparse.ArgumentParser(
+        description="download-insta-tab WebSocket server",
+        epilog=(
+            "Get cookie values from Chrome DevTools:\n"
+            "  F12 → Application → Cookies → https://www.instagram.com\n"
+            "  Copy the values of 'sessionid' and 'csrftoken'"
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    parser.add_argument("--sessionid", required=True,
+                        help="Instagram sessionid cookie value")
+    parser.add_argument("--csrftoken", required=True,
+                        help="Instagram csrftoken cookie value")
     parser.add_argument("--output", "-o", default=".",
                         help="Root directory for downloads (default: current dir)")
     parser.add_argument("--port", "-p", type=int, default=7432,
@@ -185,20 +207,34 @@ def main():
         save_metadata=False,
     )
 
-    print(f"[ig-dl] Loading session from {args.browser}...")
     try:
-        import_session(args.browser, _loader, cookiefile=None)
-    except instaloader.LoginException as exc:
+        _authenticate(args.sessionid, args.csrftoken)
+    except Exception as exc:
         print(f"[ig-dl] ERROR: {exc}", file=sys.stderr)
-        print(f"[ig-dl] Make sure you are logged in to Instagram in {args.browser}.", file=sys.stderr)
         sys.exit(1)
 
     print(f"[ig-dl] Output : {_output_dir}")
-    print(f"[ig-dl] Listening on http://localhost:{args.port}  (Ctrl+C to stop)\n")
+    print(f"[ig-dl] Listening on ws://localhost:{args.port}")
+    print(f"[ig-dl] Paste console.js in any Instagram tab and call igdl()\n")
 
-    server = HTTPServer(("127.0.0.1", args.port), Handler)
+    async def process_request(connection, request):
+        """Handle Chrome's Private Network Access preflight before WebSocket upgrade."""
+        if request.headers.get("Access-Control-Request-Private-Network") == "true":
+            return connection.respond(
+                http.HTTPStatus.NO_CONTENT,
+                [
+                    ("Access-Control-Allow-Origin", request.headers.get("Origin", "*")),
+                    ("Access-Control-Allow-Private-Network", "true"),
+                ],
+            )
+
+    async def run():
+        async with ws_serve(handle_client, "127.0.0.1", args.port,
+                            process_request=process_request):
+            await asyncio.get_running_loop().create_future()  # run forever
+
     try:
-        server.serve_forever()
+        asyncio.run(run())
     except KeyboardInterrupt:
         print("\n[ig-dl] Stopped.")
 

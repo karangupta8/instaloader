@@ -142,7 +142,7 @@ async function runInstagramPageDownloader(options = {}) {
   }
 
   function getMediaNodeFromHtml(html) {
-    // Newer IG pages often embed JSON via __additionalDataLoaded(..., { ... })
+    // Try 1: __additionalDataLoaded (newest IG pages)
     const additionalMarker = 'window.__additionalDataLoaded';
     const idx = html.indexOf(additionalMarker);
     if (idx !== -1) {
@@ -159,7 +159,27 @@ async function runInstagramPageDownloader(options = {}) {
       }
     }
 
-    // Last-resort: parse OpenGraph tags (works for single-image or video; carousels may be incomplete)
+    // Try 2: Look for full-res image/video URLs embedded in page HTML
+    //        Instagram often includes these in script tags or meta tags
+    try {
+      // Extract image and video URLs from the HTML
+      const imageUrlMatch = html.match(/"image":\s*\{\s*"url":\s*"([^"]+\.(?:jpg|png|webp|jpeg))"/i) ||
+                           html.match(/"image_versions2":\s*\{"candidates":\s*\[\s*\{"url":\s*"([^"]+)"/i);
+      const videoUrlMatch = html.match(/"video_url":\s*"([^"]+\.mp4[^"]*?)"/i) ||
+                           html.match(/"video_versions":\s*\[\s*\{"url":\s*"([^"]+\.mp4)/i);
+
+      if (imageUrlMatch || videoUrlMatch) {
+        return {
+          is_video: Boolean(videoUrlMatch),
+          display_url: imageUrlMatch?.[1],
+          video_url: videoUrlMatch?.[1],
+        };
+      }
+    } catch {
+      // ignore and fall back
+    }
+
+    // Try 3: OpenGraph tags (fallback, may be lower resolution)
     try {
       const doc = new DOMParser().parseFromString(html, 'text/html');
       const ogImage = doc.querySelector('meta[property="og:image"]')?.getAttribute('content') || null;

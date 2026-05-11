@@ -7,39 +7,57 @@ When upstream Instaloader updates, this picks up the changes automatically.
 ## How it works
 
 ```
-Chrome (logged in) ──cookies──▶ server.py ──instaloader──▶ files on disk
-      │                              ▲
-      └── console.js ──POST /download┘
+Extract cookies from DevTools
+         │
+         ▼
+python server.py ──(via WebSocket)──▶ Chrome console (any IG page)
+         │                                ▲
+         │                                │
+         └────────── instaloader ────────┘
+                                    (downloads to disk)
 ```
 
-1. `server.py` starts once, reads your Chrome session via `browser_cookie3`, authenticates with Instagram.
-2. You open any Instagram page in Chrome.
-3. Paste `console.js` into DevTools console — it detects the page type and calls the server.
-4. Instaloader downloads everything.
+1. Get your Instagram `sessionid` and `csrftoken` from DevTools.
+2. Start `server.py` with these cookies.
+3. Open any Instagram page in Chrome.
+4. Paste `console.js` into DevTools console and call `await igdl(10)`.
+5. Instaloader downloads everything at full resolution using your authenticated session.
 
----
-
-## Setup
-
-```bash
-pip install browser-cookie3   # already in Pipfile if using pipenv
-```
+**No password, no admin, no browser_cookie3. WebSocket bypasses Instagram's Content Security Policy.**
 
 ---
 
 ## Usage
 
-**Step 1 — Start the server** (once per session):
+**Step 1 — Get your cookies from DevTools**
+
+1. Open any Instagram page and press `F12` (DevTools).
+2. Go to **Application** tab → **Cookies** → `https://www.instagram.com`.
+3. Find and copy the values of:
+   - `sessionid`
+   - `csrftoken`
+
+**Step 2 — Start the server**
 
 ```bash
-# From repo root
-python download-insta-tab/server.py
+python download-insta-tab/server.py --sessionid <YOUR_SESSIONID> --csrftoken <YOUR_CSRFTOKEN>
 
-# Options
-python download-insta-tab/server.py --browser firefox --output ~/Downloads --port 7432
+# With options
+python download-insta-tab/server.py \
+  --sessionid <YOUR_SESSIONID> \
+  --csrftoken <YOUR_CSRFTOKEN> \
+  --output ~/Downloads \
+  --port 7432
 ```
 
-**Step 2 — Open any Instagram page in Chrome and log in.**
+The server will verify your credentials and display:
+```
+[ig-dl] Authenticated as @yourusername
+[ig-dl] Output : /path/to/output
+[ig-dl] Listening on ws://localhost:7432
+```
+
+**Step 3 — Open any Instagram page in Chrome** (must be logged in).
 
 Supported pages:
 | URL pattern | Downloads |
@@ -49,7 +67,9 @@ Supported pages:
 | `instagram.com/explore/tags/cats/` | Hashtag posts |
 | `instagram.com/p/AbCdEfG/` or `/reel/…` | Single post |
 
-**Step 3 — Open DevTools console** (`F12` → Console), paste `console.js`, then call:
+**Step 4 — Open DevTools console and run**
+
+Press `F12` → **Console**, paste `console.js`, then call:
 
 ```js
 await igdl()          // top 10 posts from current page
@@ -63,38 +83,17 @@ await igdl({ count: 5, port: 7432 })   // explicit options
 
 | File | Purpose |
 |---|---|
-| `server.py` | Local HTTP server — run once, handles all downloads via instaloader |
+| `server.py` | Local WebSocket server — handles all downloads via instaloader |
 | `console.js` | Paste into DevTools on any Instagram page |
-| `instagram-page-downloader.js` | Standalone browser-only alternative (no Python needed) |
+| `instagram-page-downloader.js` | Legacy standalone browser-only script (deprecated) |
 
 ---
 
 ## Notes
 
-- `server.py` must be running before you call `igdl()` in the console.
-- Session is loaded once at startup — if your Chrome session expires, restart the server.
+- **Server cookies are persistent** — extract once, use until they expire (typically weeks/months).
+- If your Instagram session expires, extract new cookies and restart the server.
 - Files are saved to `<output>/<profile>/` using instaloader's default naming (`2024-01-15_AbCdEfG.jpg`).
-- Saved posts go to `<output>/:saved/`, hashtag posts to `<output>/#cats/`.
-
----
-
-## Standalone alternative: `instagram-page-downloader.js`
-
-No Python needed — paste directly in DevTools, downloads via browser fetch.
-
-```js
-await runInstagramPageDownloader({
-  maxPosts: 10,
-  scrollDelayMs: 900,
-  requestDelayMs: 350,
-  downloadDelayMs: 250,
-});
-```
-
-| | `server.py` + `console.js` | `instagram-page-downloader.js` |
-|---|---|---|
-| Requires Python | Yes | No |
-| Works on saved/hashtag pages | Yes | No (profile only) |
-| Download quality | Full res via Instaloader | CDN URL from page |
-| Deduplication | Yes | No |
-| Rate limiting | Instaloader RateController | Manual delays |
+- Saved posts go to `<output>/:saved/`, hashtag posts to `<output>/#tagname/`.
+- The server only listens on `127.0.0.1` — your cookies never leave your machine.
+- Session cookies have normal Instagram expiration timelines; refresh them periodically if server is left running long-term.
