@@ -196,7 +196,7 @@ def _handle_hashtag(identifier: str, count: int) -> dict:
     folder_name = f"#{tag}"
     hashtag = instaloader.Hashtag.from_name(_loader.context, tag)
     target_dir = _output_dir / folder_name
-    print(f"  Hashtag : #{tag}  →  {target_dir}")
+    print(f"  Hashtag : #{tag}  ->  {target_dir}")
     downloaded = 0
     for post in itertools.islice(hashtag.get_posts(), count):
         downloaded += 1
@@ -268,7 +268,7 @@ async def handle_client(websocket):
                 continue
 
             print(f"\n[ig-dl] {page_type.upper()}"
-                  + (f" → {msg.get('identifier')}" if msg.get("identifier") else "")
+                  + (f" -> {msg.get('identifier')}" if msg.get("identifier") else "")
                   + f"  (count={count})")
 
             try:

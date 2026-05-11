@@ -548,8 +548,8 @@ if __name__ == "__main__":
                 keep_slides=args.keep_slides,
             )
             if result:
-                print(f"    → {result.name}")
+                print(f"    -> {result.name}")
             else:
-                print(f"    → skipped")
+                print(f"    -> skipped")
         except CarouselProcessingError as exc:
             print(f"    ERROR: {exc}", file=sys.stderr)
