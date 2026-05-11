@@ -345,7 +345,7 @@ def _build_mixed_grid(
     return out_path
 
 
-# ── Cleanup ────────────────────────────────────────────────────────────
+# ── Cleanup / rename ────────────────────────────────────────────────────
 
 def _delete_slides(slides: list[SlideInfo]) -> None:
     """Delete individual slide files after a successful composite was created."""
@@ -354,6 +354,23 @@ def _delete_slides(slides: list[SlideInfo]) -> None:
             slide.path.unlink()
         except OSError as exc:
             logger.warning(f"Could not delete slide {slide.path.name}: {exc}")
+
+
+def _rename_companion_txt(target_dir: Path, shortcode: str, composite_path: Path) -> None:
+    """
+    Find the .txt caption file instaloader created (named after filename_pattern)
+    and rename it to match the composite file: {shortcode}_carousel.txt
+    """
+    # instaloader names the txt file using the same base as the image/video,
+    # without any slide suffix, e.g. "2024-01-15_username_ABC123.txt"
+    matches = list(target_dir.glob(f"*_{shortcode}.txt"))
+    if not matches:
+        return
+    dest = composite_path.with_suffix(".txt")
+    try:
+        matches[0].rename(dest)
+    except OSError as exc:
+        logger.warning(f"Could not rename companion txt: {exc}")
 
 
 # ── Main entry point ────────────────────────────────────────────────────
@@ -418,20 +435,22 @@ def process_carousel(
         # Fallback: if images present, still produce collage
         image_slides = [s for s in slides if not s.is_video]
         if len(image_slides) >= 2:
-            out_path = target_dir / f"{post.shortcode}_carousel.jpg"
+            out_path = target_dir / f"{post.owner_username}_{post.shortcode}_carousel.jpg"
             if out_path.exists():
                 logger.debug(f"Carousel output already exists: {out_path.name}")
                 return out_path
             try:
                 result = _build_image_collage(image_slides, out_path, cell_size)
                 _delete_slides(image_slides)
+                _rename_companion_txt(target_dir, post.shortcode, result)
                 return result
             except CarouselProcessingError as exc:
                 logger.warning(f"Image collage failed: {exc}")
         return None
 
-    out_path_jpg = target_dir / f"{post.shortcode}_carousel.jpg"
-    out_path_mp4 = target_dir / f"{post.shortcode}_carousel.mp4"
+    stem = f"{post.owner_username}_{post.shortcode}_carousel"
+    out_path_jpg = target_dir / f"{stem}.jpg"
+    out_path_mp4 = target_dir / f"{stem}.mp4"
 
     # Images only
     if not has_videos:
@@ -440,6 +459,7 @@ def process_carousel(
             return out_path_jpg
         result = _build_image_collage(slides, out_path_jpg, cell_size)
         _delete_slides(slides)
+        _rename_companion_txt(target_dir, post.shortcode, result)
         return result
 
     # Videos only
@@ -449,6 +469,7 @@ def process_carousel(
             return out_path_mp4
         result = _build_video_concat(slides, out_path_mp4, cell_size)
         _delete_slides(slides)
+        _rename_companion_txt(target_dir, post.shortcode, result)
         return result
 
     # Mixed: images + videos
@@ -459,4 +480,5 @@ def process_carousel(
     max_dur = max(_get_video_duration(s.path) for s in slides if s.is_video)
     result = _build_mixed_grid(slides, out_path_mp4, cell_size, max_dur=max_dur)
     _delete_slides(slides)
+    _rename_companion_txt(target_dir, post.shortcode, result)
     return result

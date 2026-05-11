@@ -231,8 +231,8 @@ def main():
                         help="Root directory for downloads (default: current dir)")
     parser.add_argument("--port", "-p", type=int, default=7432,
                         help="Port to listen on (default: 7432)")
-    parser.add_argument("--filename-pattern", default="{date}_{owner_username}_{shortcode}",
-                        help="Filename pattern for downloads (default: {date}_{owner_username}_{shortcode}). "
+    parser.add_argument("--filename-pattern", default="{owner_username}_{shortcode}",
+                        help="Filename pattern for downloads (default: {owner_username}_{shortcode}). "
                              "Available: {date}, {owner_username}, {shortcode}, etc.")
     args = parser.parse_args()
 
