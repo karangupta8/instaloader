@@ -19,6 +19,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
+logger.setLevel(logging.DEBUG)
 
 # ── Errors ──────────────────────────────────────────────────────────────────
 
@@ -371,12 +372,18 @@ def process_carousel(
     """
     target_dir = Path(target_dir)
 
+    # Debug info
+    logger.debug(f"process_carousel called: post.typename={post.typename}, mediacount={post.mediacount}, shortcode={post.shortcode}")
+
     # Only process carousels with multiple slides
     if post.typename != "GraphSidecar" or post.mediacount <= 1:
+        logger.debug(f"Skipping: not a carousel or single item")
         return None
 
     # Discover downloaded slide files
+    logger.debug(f"Looking for carousel files in {target_dir}")
     slides = find_carousel_files(target_dir, post.shortcode)
+    logger.debug(f"Found {len(slides)} slide files")
     if not slides:
         logger.warning(
             f"Carousel post {post.shortcode} expected {post.mediacount} slides "

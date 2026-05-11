@@ -72,10 +72,14 @@ def _maybe_process_carousel(post, target_dir: Path) -> None:
         result = carousel_processor.process_carousel(post, target_dir)
         if result:
             print(f"  Carousel: {result.name}")
+        elif post.typename == "GraphSidecar":
+            print(f"  [carousel] Skipped (single item or no files found)")
     except carousel_processor.CarouselProcessingError as exc:
-        print(f"  [carousel] WARNING: {exc}", file=sys.stderr)
+        print(f"  [carousel] ERROR: {exc}", file=sys.stderr)
     except Exception as exc:
+        import traceback
         print(f"  [carousel] Unexpected error: {exc}", file=sys.stderr)
+        traceback.print_exc(file=sys.stderr)
 
 
 # ── Download handlers ────────────────────────────────────────────────────────
@@ -225,6 +229,10 @@ def main():
     _output_dir = Path(args.output).expanduser().resolve()
     _output_dir.mkdir(parents=True, exist_ok=True)
 
+    # Debug: show what path was resolved
+    print(f"[ig-dl] Input path: {args.output}")
+    print(f"[ig-dl] Resolved to: {_output_dir}")
+
     _loader = instaloader.Instaloader(
         filename_pattern=args.filename_pattern,
         download_video_thumbnails=False,
@@ -255,12 +263,31 @@ def main():
     async def run():
         async with ws_serve(handle_client, "127.0.0.1", args.port,
                             process_request=process_request):
-            await asyncio.get_running_loop().create_future()  # run forever
+            # Run indefinitely, but allow cancellation
+            try:
+                await asyncio.sleep(float('inf'))
+            except asyncio.CancelledError:
+                pass
+
+    import signal
+
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    main_task = None
+
+    def handle_shutdown(sig=None, frame=None):
+        if main_task and not main_task.done():
+            main_task.cancel()
+
+    signal.signal(signal.SIGINT, handle_shutdown)
 
     try:
-        asyncio.run(run())
-    except KeyboardInterrupt:
+        main_task = loop.create_task(run())
+        loop.run_until_complete(main_task)
+    except (KeyboardInterrupt, asyncio.CancelledError):
         print("\n[ig-dl] Stopped.")
+    finally:
+        loop.close()
 
 
 if __name__ == "__main__":
