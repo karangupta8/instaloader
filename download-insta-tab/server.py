@@ -33,6 +33,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import instaloader
 from websockets.asyncio.server import serve as ws_serve
 
+import caption_graphic
 import carousel_processor
 
 # ── Globals set once at startup ─────────────────────────────────────────────
@@ -40,6 +41,9 @@ import carousel_processor
 _loader: instaloader.Instaloader | None = None
 _output_dir: Path = Path(".")
 _authenticated: bool = False
+_skip_post_process: bool = False
+_skip_collage: bool = False
+_skip_graphic: bool = False
 
 
 def _get_saved_dir_name() -> str:
@@ -71,12 +75,72 @@ def _authenticate(sessionid: str, csrftoken: str) -> str:
     return test_user
 
 
-# ── Carousel post-processing ───────────────────────────────────────────────
+# ── Post metadata (caption + comments) ────────────────────────────────────
+
+def _save_post_metadata(post, txt_path: Path) -> None:
+    """Write caption and top 5 comments as JSON to txt_path."""
+    caption = post.caption or ""
+
+    top_comments = []
+    try:
+        for comment in itertools.islice(post.get_comments(), 5):
+            top_comments.append({
+                "username": comment.owner.username,
+                "text": comment.text,
+                "likes": comment.likes_count,
+                "timestamp": comment.created_at_utc.isoformat(),
+            })
+    except Exception as exc:
+        print(f"  [meta] Could not fetch comments: {exc}", file=sys.stderr)
+
+    metadata = {
+        "caption": caption,
+        "top_comments": top_comments,
+    }
+    try:
+        txt_path.write_text(json.dumps(metadata, ensure_ascii=False, indent=2), encoding="utf-8")
+    except OSError as exc:
+        print(f"  [meta] Could not write {txt_path.name}: {exc}", file=sys.stderr)
+
+
+# ── Post-processing helpers ────────────────────────────────────────────────
+
+_MEDIA_EXTS = [".jpg", ".jpeg", ".webp", ".mp4", ".mov"]
+
+
+def _maybe_create_snapshot(post, target_dir: Path) -> None:
+    """Non-fatal: find the downloaded file and append a caption graphic."""
+    if _skip_post_process or _skip_graphic:
+        return
+    txt_path = target_dir / f"{post.owner_username}_{post.shortcode}.txt"
+    if not txt_path.exists():
+        return
+    for ext in _MEDIA_EXTS:
+        candidate = target_dir / f"{post.owner_username}_{post.shortcode}{ext}"
+        if candidate.exists():
+            snap_suffix = ".mp4" if ext in (".mp4", ".mov") else ".jpg"
+            snapshot_path = target_dir / f"{post.owner_username}_{post.shortcode}_snapshot{snap_suffix}"
+            try:
+                result = caption_graphic.create_snapshot(candidate, txt_path, snapshot_path)
+                if result:
+                    print(f"  Snapshot: {result.name}")
+            except caption_graphic.CaptionGraphicError as exc:
+                print(f"  [snapshot] ERROR: {exc}", file=sys.stderr)
+            except Exception as exc:
+                print(f"  [snapshot] Unexpected error: {exc}", file=sys.stderr)
+            return
+
 
 def _maybe_process_carousel(post, target_dir: Path) -> None:
     """Non-fatal carousel post-processing step."""
+    if _skip_post_process:
+        return
     try:
-        result = carousel_processor.process_carousel(post, target_dir)
+        result = carousel_processor.process_carousel(
+            post, target_dir,
+            make_collage=not _skip_collage,
+            make_graphic=not _skip_graphic,
+        )
         if result:
             print(f"  Carousel: {result.name}")
         elif post.typename == "GraphSidecar":
@@ -84,7 +148,6 @@ def _maybe_process_carousel(post, target_dir: Path) -> None:
     except carousel_processor.CarouselProcessingError as exc:
         print(f"  [carousel] ERROR: {exc}", file=sys.stderr)
     except Exception as exc:
-        import traceback
         print(f"  [carousel] Unexpected error: {exc}", file=sys.stderr)
         traceback.print_exc(file=sys.stderr)
 
@@ -102,6 +165,9 @@ def _handle_profile(identifier: str, count: int) -> dict:
         downloaded += 1
         print(f"  [{downloaded}/{actual}] {post.shortcode}", end="  ")
         _loader.download_post(post, target=profile.username)
+        txt_path = target_dir / f"{post.owner_username}_{post.shortcode}.txt"
+        _save_post_metadata(post, txt_path)
+        _maybe_create_snapshot(post, target_dir)
         _maybe_process_carousel(post, target_dir)
         print()
     return {"downloaded": downloaded, "target": str(target_dir)}
@@ -117,6 +183,9 @@ def _handle_saved(count: int) -> dict:
         downloaded += 1
         print(f"  [{downloaded}] {post.shortcode}", end="  ")
         _loader.download_post(post, target=folder_name)
+        txt_path = target_dir / f"{post.owner_username}_{post.shortcode}.txt"
+        _save_post_metadata(post, txt_path)
+        _maybe_create_snapshot(post, target_dir)
         _maybe_process_carousel(post, target_dir)
         print()
     return {"downloaded": downloaded, "target": str(target_dir)}
@@ -133,6 +202,9 @@ def _handle_hashtag(identifier: str, count: int) -> dict:
         downloaded += 1
         print(f"  [{downloaded}/{count}] {post.shortcode}", end="  ")
         _loader.download_post(post, target=folder_name)
+        txt_path = target_dir / f"{post.owner_username}_{post.shortcode}.txt"
+        _save_post_metadata(post, txt_path)
+        _maybe_create_snapshot(post, target_dir)
         _maybe_process_carousel(post, target_dir)
         print()
     return {"downloaded": downloaded, "target": str(target_dir)}
@@ -144,6 +216,9 @@ def _handle_post(identifier: str) -> dict:
     target_dir = _output_dir / folder_name
     print(f"  Post    : {identifier}  ({post.typename})")
     _loader.download_post(post, target=folder_name)
+    txt_path = target_dir / f"{post.owner_username}_{post.shortcode}.txt"
+    _save_post_metadata(post, txt_path)
+    _maybe_create_snapshot(post, target_dir)
     _maybe_process_carousel(post, target_dir)
     return {"downloaded": 1, "target": str(target_dir)}
 
@@ -234,7 +309,18 @@ def main():
     parser.add_argument("--filename-pattern", default="{owner_username}_{shortcode}",
                         help="Filename pattern for downloads (default: {owner_username}_{shortcode}). "
                              "Available: {date}, {owner_username}, {shortcode}, etc.")
+    parser.add_argument("--no-post-process", action="store_true",
+                        help="Skip all post-processing (collage + caption graphic)")
+    parser.add_argument("--no-collage", action="store_true",
+                        help="Skip carousel collage/concat")
+    parser.add_argument("--no-graphic", action="store_true",
+                        help="Skip caption graphic snapshot")
     args = parser.parse_args()
+
+    global _skip_post_process, _skip_collage, _skip_graphic
+    _skip_post_process = args.no_post_process
+    _skip_collage      = args.no_collage
+    _skip_graphic      = args.no_graphic
 
     _output_dir = Path(args.output).expanduser().resolve()
     _output_dir.mkdir(parents=True, exist_ok=True)
@@ -252,6 +338,7 @@ def main():
         filename_pattern=args.filename_pattern,
         download_video_thumbnails=False,
         save_metadata=False,
+        post_metadata_txt_pattern="",  # we write our own JSON txt
     )
 
     try:

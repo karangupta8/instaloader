@@ -51,13 +51,6 @@ python download-insta-tab/server.py \
   --filename-pattern "{date}_{owner_username}_{shortcode}"
 ```
 
-**Filename pattern** — customize how files are named:
-| Pattern | Result |
-|---|---|
-| `{date}_{owner_username}_{shortcode}` | `2024-01-15_natgeo_AbCdEfG.jpg` (default) |
-| `{owner_username}_{shortcode}` | `natgeo_AbCdEfG.jpg` |
-| `{shortcode}` | `AbCdEfG.jpg` |
-
 The server will verify your credentials and display:
 ```
 [ig-dl] Authenticated as @yourusername
@@ -87,21 +80,143 @@ await igdl({ count: 5, port: 7432 })   // explicit options
 
 ---
 
+## Output structure
+
+For each downloaded post you get:
+
+```
+<output>/
+└── <username>/
+    ├── username_shortcode.jpg          ← original media
+    ├── username_shortcode.txt          ← caption + top 5 comments (JSON)
+    ├── username_shortcode_snapshot.jpg ← caption graphic appended to image
+    └── username_shortcode_carousel.jpg ← grid composite (carousel posts only)
+        username_shortcode_carousel_snapshot.jpg
+```
+
+- **Saved posts** go to `<output>/_saved/` (Windows) or `<output>/:saved/` (Linux/Mac).
+- **Hashtag posts** go to `<output>/#tagname/`.
+- **Videos** produce `_snapshot.mp4` (panel appended via ffmpeg).
+- **Carousel posts** produce a collage image/video grid AND a snapshot of that collage.
+
+---
+
+## Server flags
+
+| Flag | Default | Description |
+|---|---|---|
+| `--sessionid` | *(required)* | Instagram `sessionid` cookie value |
+| `--csrftoken` | *(required)* | Instagram `csrftoken` cookie value |
+| `--output`, `-o` | `.` | Root directory for all downloads |
+| `--port`, `-p` | `7432` | WebSocket port to listen on |
+| `--filename-pattern` | `{owner_username}_{shortcode}` | Instaloader filename template |
+| `--no-post-process` | off | Skip all post-processing (collage + caption graphic) |
+| `--no-collage` | off | Skip carousel collage/concat only |
+| `--no-graphic` | off | Skip caption graphic snapshot only |
+
+**Filename pattern tokens:** `{date}`, `{owner_username}`, `{shortcode}`, `{mediaid}`, etc.
+
+```bash
+# Download files only, no post-processing at all
+python download-insta-tab/server.py ... --no-post-process
+
+# Collages yes, but skip graphic panels
+python download-insta-tab/server.py ... --no-graphic
+
+# Graphics yes, but no carousel collages
+python download-insta-tab/server.py ... --no-collage
+```
+
+---
+
+## Caption graphic
+
+After each download, `caption_graphic.py` generates an Instagram-style panel from the saved `.txt` metadata and appends it to the media file:
+
+```
+┌──────────────────────────────────────┐
+│  Caption text, word-wrapped…         │
+│  #hashtag and @mention in blue       │
+│  ────────────────────────────────    │
+│  @user1  First comment text…         │
+│    ♥ 142                             │
+│  @user2  Another comment…            │
+└──────────────────────────────────────┘
+```
+
+- **Portrait images** (height > width): panel appended as a right-hand sidebar (max 400 px wide).
+- **Square / landscape images**: panel appended as a strip below.
+- **Videos**: panel composited below via ffmpeg (`vstack`), audio preserved.
+
+Requires **Pillow** (`pip install Pillow`) and **ffmpeg** on your PATH for video posts.
+
+---
+
+## Carousel processor
+
+`carousel_processor.py` detects multi-image/video carousel posts and:
+
+1. Assembles individual slides into a single composite grid image (images) or concatenated video.
+2. Optionally appends the caption graphic to the composite.
+
+It can also be run standalone on a directory of already-downloaded files:
+
+```bash
+# Process all carousels found in a directory
+python download-insta-tab/carousel_processor.py ~/Downloads/_saved
+
+# One specific shortcode only
+python download-insta-tab/carousel_processor.py ~/Downloads/_saved --shortcode AbCdEfG
+
+# Skip the caption graphic
+python download-insta-tab/carousel_processor.py ~/Downloads/_saved --no-graphic
+
+# Skip the collage entirely (just rename/tidy files)
+python download-insta-tab/carousel_processor.py ~/Downloads/_saved --no-collage
+
+# Keep individual slide files after compositing
+python download-insta-tab/carousel_processor.py ~/Downloads/_saved --keep-slides
+
+# Custom cell size for the grid (default 640 px)
+python download-insta-tab/carousel_processor.py ~/Downloads/_saved --cell-size 800
+```
+
+Requires **Pillow** and **ffmpeg**.
+
+---
+
 ## Files
 
 | File | Purpose |
 |---|---|
-| `server.py` | Local WebSocket server — handles all downloads via instaloader |
+| `server.py` | Local WebSocket server — authenticates, downloads, post-processes |
 | `console.js` | Paste into DevTools on any Instagram page |
+| `carousel_processor.py` | Carousel collage builder; also runnable as a standalone CLI |
+| `caption_graphic.py` | Generates Instagram-style caption+comments panel and appends it to media |
 | `instagram-page-downloader.js` | Legacy standalone browser-only script (deprecated) |
+
+---
+
+## Dependencies
+
+| Package | Required for |
+|---|---|
+| `instaloader` | Core download engine (parent package) |
+| `websockets` | WebSocket server |
+| `Pillow` | Image collage and caption panel |
+| `ffmpeg` (system) | Video concat and caption panel on videos |
+
+Install Python dependencies:
+```bash
+pip install instaloader websockets Pillow
+```
 
 ---
 
 ## Notes
 
-- **Server cookies are persistent** — extract once, use until they expire (typically weeks/months).
-- If your Instagram session expires, extract new cookies and restart the server.
-- Files are saved to `<output>/<profile>/` using instaloader's default naming (`2024-01-15_AbCdEfG.jpg`).
-- Saved posts go to `<output>/:saved/`, hashtag posts to `<output>/#tagname/`.
 - The server only listens on `127.0.0.1` — your cookies never leave your machine.
-- Session cookies have normal Instagram expiration timelines; refresh them periodically if server is left running long-term.
+- Session cookies typically last weeks to months; restart the server with fresh cookies if authentication fails.
+- `--no-post-process` overrides `--no-collage` and `--no-graphic` — when set, nothing extra runs.
+- If `--no-collage` is set but `--no-graphic` is not, no graphic is generated for carousel posts (there is no composite to attach it to).
+- Saved posts use `_saved` as the folder name on Windows (`:` is not allowed in Windows directory names).
