@@ -318,20 +318,25 @@ def append_panel_to_image(img_path: Path, txt_path: Path, out_path: Path) -> Pat
 
 # ── Appending to videos ───────────────────────────────────────────────────────
 
-def _get_video_dimensions(path: Path) -> tuple[int, int]:
-    """Return (width, height) of a video using ffprobe."""
+def _get_video_info(path: Path) -> tuple[int, int, float]:
+    """Return (width, height, duration_seconds) of a video using ffprobe."""
     result = subprocess.run(
         [
             "ffprobe", "-v", "error",
             "-select_streams", "v:0",
             "-show_entries", "stream=width,height",
-            "-of", "csv=p=0",
+            "-show_entries", "format=duration",
+            "-of", "json",
             str(path),
         ],
         capture_output=True, text=True, check=True,
     )
-    parts = result.stdout.strip().split(",")
-    return int(parts[0]), int(parts[1])
+    import json as _json
+    data = _json.loads(result.stdout)
+    w   = int(data["streams"][0]["width"])
+    h   = int(data["streams"][0]["height"])
+    dur = float(data["format"]["duration"])
+    return w, h, dur
 
 
 def append_panel_to_video(video_path: Path, txt_path: Path, out_path: Path) -> Path:
@@ -346,34 +351,42 @@ def append_panel_to_video(video_path: Path, txt_path: Path, out_path: Path) -> P
         raise CaptionGraphicError(f"No metadata found in {txt_path.name}")
 
     try:
-        video_w, video_h = _get_video_dimensions(video_path)
-    except (subprocess.CalledProcessError, ValueError, FileNotFoundError) as exc:
-        raise CaptionGraphicError(f"Could not get video dimensions: {exc}") from exc
+        video_w, video_h, duration = _get_video_info(video_path)
+    except (subprocess.CalledProcessError, ValueError, FileNotFoundError, KeyError) as exc:
+        raise CaptionGraphicError(f"Could not get video info: {exc}") from exc
 
-    panel = build_caption_panel(metadata, video_w)
+    # libx264 requires even dimensions — round video width up if needed
+    even_w = video_w if video_w % 2 == 0 else video_w + 1
+
+    panel = build_caption_panel(metadata, even_w)
 
     with tempfile.TemporaryDirectory() as tmp:
         panel_png = Path(tmp) / "_panel.png"
         panel.save(panel_png, "PNG")
 
         panel_h = panel.height
+        # Ensure panel height is also even for the vstack total
+        even_panel_h = panel_h if panel_h % 2 == 0 else panel_h + 1
 
+        # Use explicit -t <duration> instead of -shortest to avoid the
+        # "Could not open encoder before EOF" race between the looped
+        # image stream and the video stream on short clips.
         cmd = [
             "ffmpeg", "-y",
             "-i", str(video_path),
-            "-loop", "1", "-i", str(panel_png),
+            "-i", str(panel_png),
             "-filter_complex",
             (
-                f"[0:v]setsar=1[vid];"
-                f"[1:v]scale={video_w}:{panel_h}:force_original_aspect_ratio=decrease,"
-                f"pad={video_w}:{panel_h}:(ow-iw)/2:(oh-ih)/2,setsar=1[panel];"
-                f"[vid][panel]vstack=inputs=2[outv]"
+                f"[0:v]scale={even_w}:-2,setsar=1[vid];"
+                f"[1:v]loop=loop=-1:size=1:start=0,"
+                f"scale={even_w}:{even_panel_h},setsar=1[panel];"
+                f"[vid][panel]vstack=inputs=2,format=yuv420p[outv]"
             ),
             "-map", "[outv]",
-            "-map", "0:a?",         # keep audio if present, suppress error if absent
+            "-map", "0:a?",
             "-c:v", "libx264", "-crf", "23", "-preset", "fast",
             "-c:a", "copy",
-            "-shortest",
+            "-t", str(duration),
             "-movflags", "+faststart",
             str(out_path),
         ]
@@ -382,6 +395,9 @@ def append_panel_to_video(video_path: Path, txt_path: Path, out_path: Path) -> P
         except FileNotFoundError as exc:
             raise CaptionGraphicError("ffmpeg not found") from exc
         except subprocess.CalledProcessError as exc:
+            # Remove any partial/zero-byte output file ffmpeg may have created
+            if out_path.exists():
+                out_path.unlink(missing_ok=True)
             raise CaptionGraphicError(
                 f"ffmpeg failed: {exc.stderr[-500:]}"
             ) from exc
@@ -468,7 +484,7 @@ if __name__ == "__main__":
         try:
             result = create_snapshot(media_path, txt_path, snapshot_path)
             if result:
-                print(f"  {media_path.name}  →  {result.name}")
+                print(f"  {media_path.name}  ->  {result.name}")
                 processed += 1
             else:
                 print(f"  {media_path.name}  skipped (no usable metadata)")

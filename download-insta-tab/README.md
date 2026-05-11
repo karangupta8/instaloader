@@ -150,6 +150,20 @@ After each download, `caption_graphic.py` generates an Instagram-style panel fro
 
 Requires **Pillow** (`pip install Pillow`) and **ffmpeg** on your PATH for video posts.
 
+### Retroactive application
+
+Caption graphics are generated automatically during download. If you downloaded posts before this feature existed, or ran with `--no-graphic`, apply them retroactively with the standalone CLI:
+
+```bash
+# Apply caption graphics to everything in a folder that doesn't have one yet
+python download-insta-tab/caption_graphic.py ~/Downloads/_saved
+
+# Re-generate snapshots that already exist
+python download-insta-tab/caption_graphic.py ~/Downloads/_saved --overwrite
+```
+
+This scans for any `{name}.txt` + `{name}.{jpg|mp4|…}` pair without a matching `{name}_snapshot.*`, generates the snapshot, then **deletes the original media and `.txt`** (since the snapshot contains everything). Works on single posts and already-built `_carousel.*` composites alike.
+
 ---
 
 ## Carousel processor
@@ -159,7 +173,9 @@ Requires **Pillow** (`pip install Pillow`) and **ffmpeg** on your PATH for video
 1. Assembles individual slides into a single composite grid image (images) or concatenated video.
 2. Optionally appends the caption graphic to the composite.
 
-It can also be run standalone on a directory of already-downloaded files:
+It can also be run standalone on a directory of already-downloaded files to build collages from raw slides (`_1.jpg`, `_2.jpg`, …).
+
+> **Note:** If the server already processed a carousel, the individual slides are deleted and only `_carousel.jpg` remains — `carousel_processor.py` will correctly report "No carousels found" in that case. To retroactively apply caption graphics to already-processed files, use `caption_graphic.py` instead (see below).
 
 ```bash
 # Process all carousels found in a directory
