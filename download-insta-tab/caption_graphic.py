@@ -451,6 +451,8 @@ if __name__ == "__main__":
                         help="Directory containing downloaded media and .txt files")
     parser.add_argument("--overwrite", action="store_true",
                         help="Re-generate snapshots that already exist")
+    parser.add_argument("--delete", action="store_true",
+                        help="Delete original media and .txt files after snapshot")
     args = parser.parse_args()
 
     target_dir = args.input_dir.expanduser().resolve()
@@ -487,6 +489,9 @@ if __name__ == "__main__":
             if result:
                 print(f"-> {result.name}")
                 processed += 1
+                if args.delete:
+                    media_path.unlink()
+                    txt_path.unlink()
             else:
                 print("skipped (no usable metadata)")
         except CaptionGraphicError as exc:

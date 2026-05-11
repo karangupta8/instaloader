@@ -160,9 +160,12 @@ python download-insta-tab/caption_graphic.py ~/Downloads/_saved
 
 # Re-generate snapshots that already exist
 python download-insta-tab/caption_graphic.py ~/Downloads/_saved --overwrite
+
+# Delete original media and .txt files after creating snapshot
+python download-insta-tab/caption_graphic.py ~/Downloads/_saved --delete
 ```
 
-This scans for any `{name}.txt` + `{name}.{jpg|mp4|…}` pair without a matching `{name}_snapshot.*`, generates the snapshot, then **deletes the original media and `.txt`** (since the snapshot contains everything). Works on single posts and already-built `_carousel.*` composites alike.
+This scans for any `{name}.txt` + `{name}.{jpg|mp4|…}` pair without a matching `{name}_snapshot.*`, generates the snapshot, and can optionally **delete the original media and `.txt`** files using the `--delete` flag. Works on single posts and already-built `_carousel.*` composites alike.
 
 ---
 
