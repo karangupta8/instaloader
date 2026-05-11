@@ -23,14 +23,14 @@ DIVIDER_COLOR   = (219, 219, 219)   # #DBDBDB rule between caption and comments
 HASHTAG_COLOR   = (0, 53, 105)      # #003569 hashtags and @mentions in caption
 MENTION_COLOR   = (0, 53, 105)      # same blue for @user prefix in comments
 
-PADDING         = 20    # px margin inside panel on all sides
-CAPTION_SIZE    = 14    # pt caption font
-COMMENT_SIZE    = 13    # pt comment body font
-LIKES_SIZE      = 11    # pt likes counter
-LINE_SPACING    = 5     # px between wrapped lines within a block
-COMMENT_GAP     = 14    # px between individual comments
-DIVIDER_MARGIN  = 14    # px above and below the horizontal rule
-MAX_CAPTION_LINES = 8   # truncate long captions at this many lines
+PADDING         = 10    # px margin inside panel on all sides (reduced to save space)
+CAPTION_SIZE    = 20    # pt caption font (larger)
+COMMENT_SIZE    = 20    # pt comment body font (larger)
+LIKES_SIZE      = 6    # pt likes counter (slightly larger)
+LINE_SPACING    = 3     # px between wrapped lines within a block
+COMMENT_GAP     = 6    # px between individual comments
+DIVIDER_MARGIN  = 7    # px above and below the horizontal rule
+MAX_CAPTION_LINES = 6   # reduced from 8 to prevent panel from becoming too tall with larger font
 
 VIDEO_EXTS = {".mp4", ".mov", ".m4v", ".webm"}
 IMAGE_EXTS = {".jpg", ".jpeg", ".webp", ".png"}
@@ -482,14 +482,15 @@ if __name__ == "__main__":
             continue
 
         try:
+            print(f"  {media_path.name} ... ", end="", flush=True)
             result = create_snapshot(media_path, txt_path, snapshot_path)
             if result:
-                print(f"  {media_path.name}  ->  {result.name}")
+                print(f"-> {result.name}")
                 processed += 1
             else:
-                print(f"  {media_path.name}  skipped (no usable metadata)")
+                print("skipped (no usable metadata)")
         except CaptionGraphicError as exc:
-            print(f"  ERROR {media_path.name}: {exc}", file=sys.stderr)
+            print(f"\n  ERROR {media_path.name}: {exc}", file=sys.stderr)
             errors += 1
 
     print(f"\nDone: {processed} generated, {skipped} already existed, {errors} errors.")
