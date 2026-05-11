@@ -8,13 +8,11 @@ Supports:
 - Mixed carousels → video grid with images frozen, videos playing (ffmpeg xstack)
 """
 
-import json
 import logging
 import math
 import re
 import shutil
 import subprocess
-import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -40,7 +38,7 @@ class SlideInfo:
 
 # ── File discovery ─────────────────────────────────────────────────────────
 
-SLIDE_PATTERN = re.compile(r"^.+_([A-Za-z0-9_-]+)_(\d+)\.(jpg|mp4)$")
+SLIDE_PATTERN = re.compile(r"^.+_([A-Za-z0-9_-]+)_(\d+)\.(jpg|jpeg|webp|mp4|mov)$")
 
 
 def find_carousel_files(target_dir: Path, shortcode: str) -> list[SlideInfo]:
@@ -140,7 +138,7 @@ def _check_ffmpeg() -> bool:
 def _run_ffmpeg(cmd: list[str]) -> None:
     """Execute ffmpeg command, raising CarouselProcessingError on failure."""
     try:
-        result = subprocess.run(
+        subprocess.run(
             cmd,
             capture_output=True,
             text=True,
@@ -312,7 +310,6 @@ def _build_mixed_grid(
     )
 
     # Audio: mix from video slides, silence from image slots
-    has_any_audio = any(s.is_video for s in slides)
     audio_inputs: list[str] = []
 
     for i, slide in enumerate(slides):
@@ -346,6 +343,17 @@ def _build_mixed_grid(
 
     _run_ffmpeg(cmd)
     return out_path
+
+
+# ── Cleanup ────────────────────────────────────────────────────────────
+
+def _delete_slides(slides: list[SlideInfo]) -> None:
+    """Delete individual slide files after a successful composite was created."""
+    for slide in slides:
+        try:
+            slide.path.unlink()
+        except OSError as exc:
+            logger.warning(f"Could not delete slide {slide.path.name}: {exc}")
 
 
 # ── Main entry point ────────────────────────────────────────────────────
@@ -415,7 +423,9 @@ def process_carousel(
                 logger.debug(f"Carousel output already exists: {out_path.name}")
                 return out_path
             try:
-                return _build_image_collage(image_slides, out_path, cell_size)
+                result = _build_image_collage(image_slides, out_path, cell_size)
+                _delete_slides(image_slides)
+                return result
             except CarouselProcessingError as exc:
                 logger.warning(f"Image collage failed: {exc}")
         return None
@@ -428,14 +438,18 @@ def process_carousel(
         if out_path_jpg.exists():
             logger.debug(f"Carousel output already exists: {out_path_jpg.name}")
             return out_path_jpg
-        return _build_image_collage(slides, out_path_jpg, cell_size)
+        result = _build_image_collage(slides, out_path_jpg, cell_size)
+        _delete_slides(slides)
+        return result
 
     # Videos only
     if not has_images:
         if out_path_mp4.exists():
             logger.debug(f"Carousel output already exists: {out_path_mp4.name}")
             return out_path_mp4
-        return _build_video_concat(slides, out_path_mp4, cell_size)
+        result = _build_video_concat(slides, out_path_mp4, cell_size)
+        _delete_slides(slides)
+        return result
 
     # Mixed: images + videos
     if out_path_mp4.exists():
@@ -443,4 +457,6 @@ def process_carousel(
         return out_path_mp4
 
     max_dur = max(_get_video_duration(s.path) for s in slides if s.is_video)
-    return _build_mixed_grid(slides, out_path_mp4, cell_size, max_dur=max_dur)
+    result = _build_mixed_grid(slides, out_path_mp4, cell_size, max_dur=max_dur)
+    _delete_slides(slides)
+    return result

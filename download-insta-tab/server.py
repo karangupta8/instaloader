@@ -19,6 +19,7 @@ import http
 import itertools
 import json
 import logging
+import platform
 import sys
 import traceback
 from pathlib import Path
@@ -39,6 +40,12 @@ import carousel_processor
 _loader: instaloader.Instaloader | None = None
 _output_dir: Path = Path(".")
 _authenticated: bool = False
+
+
+def _get_saved_dir_name() -> str:
+    """Return saved posts directory name (Windows-safe: no colons allowed)."""
+    # Windows doesn't allow ':' in directory names, so use '_saved' on Windows
+    return "_saved" if platform.system() == "Windows" else ":saved"
 
 
 # ── Session management ───────────────────────────────────────────────────────
@@ -87,55 +94,58 @@ def _maybe_process_carousel(post, target_dir: Path) -> None:
 def _handle_profile(identifier: str, count: int) -> dict:
     profile = instaloader.Profile.from_username(_loader.context, identifier)
     actual = min(count, profile.mediacount)
-    target = str(_output_dir / profile.username)
+    target_dir = _output_dir / profile.username
     print(f"  Profile : {profile.full_name} (@{profile.username}), {profile.mediacount} posts")
-    print(f"  Target  : {target}  ({actual} posts)")
+    print(f"  Target  : {target_dir}  ({actual} posts)")
     downloaded = 0
     for post in itertools.islice(profile.get_posts(), actual):
         downloaded += 1
         print(f"  [{downloaded}/{actual}] {post.shortcode}", end="  ")
-        _loader.download_post(post, target=target)
-        _maybe_process_carousel(post, Path(target))
+        _loader.download_post(post, target=profile.username)
+        _maybe_process_carousel(post, target_dir)
         print()
-    return {"downloaded": downloaded, "target": target}
+    return {"downloaded": downloaded, "target": str(target_dir)}
 
 
 def _handle_saved(count: int) -> dict:
     profile = instaloader.Profile.own_profile(_loader.context)
-    target = str(_output_dir / ":saved")
+    folder_name = _get_saved_dir_name()
+    target_dir = _output_dir / folder_name
     print(f"  Saved posts for @{profile.username}")
     downloaded = 0
     for post in itertools.islice(profile.get_saved_posts(), count):
         downloaded += 1
         print(f"  [{downloaded}] {post.shortcode}", end="  ")
-        _loader.download_post(post, target=target)
-        _maybe_process_carousel(post, Path(target))
+        _loader.download_post(post, target=folder_name)
+        _maybe_process_carousel(post, target_dir)
         print()
-    return {"downloaded": downloaded, "target": target}
+    return {"downloaded": downloaded, "target": str(target_dir)}
 
 
 def _handle_hashtag(identifier: str, count: int) -> dict:
     tag = identifier.lstrip("#")
+    folder_name = f"#{tag}"
     hashtag = instaloader.Hashtag.from_name(_loader.context, tag)
-    target = str(_output_dir / f"#{tag}")
-    print(f"  Hashtag : #{tag}  →  {target}")
+    target_dir = _output_dir / folder_name
+    print(f"  Hashtag : #{tag}  →  {target_dir}")
     downloaded = 0
     for post in itertools.islice(hashtag.get_posts(), count):
         downloaded += 1
         print(f"  [{downloaded}/{count}] {post.shortcode}", end="  ")
-        _loader.download_post(post, target=target)
-        _maybe_process_carousel(post, Path(target))
+        _loader.download_post(post, target=folder_name)
+        _maybe_process_carousel(post, target_dir)
         print()
-    return {"downloaded": downloaded, "target": target}
+    return {"downloaded": downloaded, "target": str(target_dir)}
 
 
 def _handle_post(identifier: str) -> dict:
     post = instaloader.Post.from_shortcode(_loader.context, identifier)
-    target = str(_output_dir / post.owner_username)
+    folder_name = post.owner_username
+    target_dir = _output_dir / folder_name
     print(f"  Post    : {identifier}  ({post.typename})")
-    _loader.download_post(post, target=target)
-    _maybe_process_carousel(post, Path(target))
-    return {"downloaded": 1, "target": target}
+    _loader.download_post(post, target=folder_name)
+    _maybe_process_carousel(post, target_dir)
+    return {"downloaded": 1, "target": str(target_dir)}
 
 
 ROUTES = {
@@ -233,7 +243,12 @@ def main():
     print(f"[ig-dl] Input path: {args.output}")
     print(f"[ig-dl] Resolved to: {_output_dir}")
 
+    # Embed the absolute output path in dirname_pattern so instaloader never
+    # sanitizes the base path (it only sanitizes the {target} substitution).
+    # On Windows, passing a full path as `target` causes colons and backslashes
+    # to be replaced with full-width lookalikes, which breaks path resolution.
     _loader = instaloader.Instaloader(
+        dirname_pattern=str(_output_dir / "{target}"),
         filename_pattern=args.filename_pattern,
         download_video_thumbnails=False,
         save_metadata=False,
