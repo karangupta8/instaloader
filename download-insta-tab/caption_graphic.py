@@ -384,7 +384,7 @@ def append_panel_to_video(video_path: Path, txt_path: Path, out_path: Path) -> P
             ),
             "-map", "[outv]",
             "-map", "0:a?",
-            "-c:v", "libx264", "-crf", "23", "-preset", "fast",
+            "-c:v", "libx264", "-crf", "23", "-preset", "superfast",
             "-c:a", "copy",
             "-t", str(duration),
             "-movflags", "+faststart",
