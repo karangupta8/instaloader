@@ -75,7 +75,8 @@ Press `F12` → **Console**, paste `console.js`, then call:
 ```js
 await igdl()          // top 10 posts from current page
 await igdl(30)        // top 30 posts
-await igdl({ count: 5, port: 7432 })   // explicit options
+await igdl(10, 5)     // download 10 posts, skipping first 5
+await igdl({ count: 5, skip: 2, port: 7432 })   // explicit options
 ```
 
 ---

@@ -5,7 +5,8 @@
 
       await igdl()           // download 10 posts from current page
       await igdl(30)         // download 30 posts
-      await igdl({ count: 5, port: 7432 })
+      await igdl(10, 5)      // download 10 posts, skipping first 5
+      await igdl({ count: 5, skip: 2, port: 7432 })
 
   Works on:
     - Profile page      instagram.com/natgeo/
@@ -20,9 +21,10 @@
   Auth is automatic: sends your session cookies on first call.
 */
 
-async function igdl(countOrOptions = 10) {
-  const opts  = typeof countOrOptions === "object" ? countOrOptions : { count: countOrOptions };
+async function igdl(countOrOptions = 10, skip = 0) {
+  const opts  = typeof countOrOptions === "object" ? countOrOptions : { count: countOrOptions, skip: skip };
   const count = opts.count ?? 10;
+  const skipVal = opts.skip ?? 0;
   const port  = opts.port  ?? 7432;
 
   // ── Detect page type ────────────────────────────────────────────────────────
@@ -62,7 +64,7 @@ async function igdl(countOrOptions = 10) {
   console.log(
     `[ig-dl] Detected: ${pageInfo.page_type}` +
     (pageInfo.identifier ? ` → ${pageInfo.identifier}` : "") +
-    `  (count=${count})`
+    `  (count=${count}, skip=${skipVal})`
   );
 
   // ── Connect via WebSocket (allowed by Instagram's CSP) ────────────────────
@@ -90,7 +92,7 @@ async function igdl(countOrOptions = 10) {
 
       if (msg.type === "status") {
         console.log(`[ig-dl] Server ready — @${msg.logged_in_as}  →  ${msg.output}`);
-        ws.send(JSON.stringify({ type: "download", ...pageInfo, count }));
+        ws.send(JSON.stringify({ type: "download", ...pageInfo, count, skip: skipVal }));
       }
 
       else if (msg.type === "done") {

@@ -154,14 +154,15 @@ def _maybe_process_carousel(post, target_dir: Path) -> None:
 
 # ── Download handlers ────────────────────────────────────────────────────────
 
-def _handle_profile(identifier: str, count: int) -> dict:
+def _handle_profile(identifier: str, count: int, skip: int = 0) -> dict:
     profile = instaloader.Profile.from_username(_loader.context, identifier)
-    actual = min(count, profile.mediacount)
+    available = max(0, profile.mediacount - skip)
+    actual = min(count, available)
     target_dir = _output_dir / profile.username
     print(f"  Profile : {profile.full_name} (@{profile.username}), {profile.mediacount} posts")
-    print(f"  Target  : {target_dir}  ({actual} posts)")
+    print(f"  Target  : {target_dir}  ({actual} posts, skipped {skip})")
     downloaded = 0
-    for post in itertools.islice(profile.get_posts(), actual):
+    for post in itertools.islice(profile.get_posts(), skip, skip + count):
         downloaded += 1
         print(f"  [{downloaded}/{actual}] {post.shortcode}", end="  ")
         _loader.download_post(post, target=profile.username)
@@ -173,13 +174,13 @@ def _handle_profile(identifier: str, count: int) -> dict:
     return {"downloaded": downloaded, "target": str(target_dir)}
 
 
-def _handle_saved(count: int) -> dict:
+def _handle_saved(count: int, skip: int = 0) -> dict:
     profile = instaloader.Profile.own_profile(_loader.context)
     folder_name = _get_saved_dir_name()
     target_dir = _output_dir / folder_name
-    print(f"  Saved posts for @{profile.username}")
+    print(f"  Saved posts for @{profile.username} (count={count}, skip={skip})")
     downloaded = 0
-    for post in itertools.islice(profile.get_saved_posts(), count):
+    for post in itertools.islice(profile.get_saved_posts(), skip, skip + count):
         downloaded += 1
         print(f"  [{downloaded}] {post.shortcode}", end="  ")
         _loader.download_post(post, target=folder_name)
@@ -191,14 +192,14 @@ def _handle_saved(count: int) -> dict:
     return {"downloaded": downloaded, "target": str(target_dir)}
 
 
-def _handle_hashtag(identifier: str, count: int) -> dict:
+def _handle_hashtag(identifier: str, count: int, skip: int = 0) -> dict:
     tag = identifier.lstrip("#")
     folder_name = f"#{tag}"
     hashtag = instaloader.Hashtag.from_name(_loader.context, tag)
     target_dir = _output_dir / folder_name
-    print(f"  Hashtag : #{tag}  ->  {target_dir}")
+    print(f"  Hashtag : #{tag}  ->  {target_dir} (count={count}, skip={skip})")
     downloaded = 0
-    for post in itertools.islice(hashtag.get_posts(), count):
+    for post in itertools.islice(hashtag.get_posts(), skip, skip + count):
         downloaded += 1
         print(f"  [{downloaded}/{count}] {post.shortcode}", end="  ")
         _loader.download_post(post, target=folder_name)
@@ -224,10 +225,10 @@ def _handle_post(identifier: str) -> dict:
 
 
 ROUTES = {
-    "profile":  lambda d, n: _handle_profile(d["identifier"], n),
-    "saved":    lambda d, n: _handle_saved(n),
-    "hashtag":  lambda d, n: _handle_hashtag(d["identifier"], n),
-    "post":     lambda d, n: _handle_post(d["identifier"]),
+    "profile":  lambda d, c, s: _handle_profile(d["identifier"], c, s),
+    "saved":    lambda d, c, s: _handle_saved(c, s),
+    "hashtag":  lambda d, c, s: _handle_hashtag(d["identifier"], c, s),
+    "post":     lambda d, c, s: _handle_post(d["identifier"]),
 }
 
 
@@ -262,6 +263,7 @@ async def handle_client(websocket):
 
             page_type = msg.get("page_type")
             count = int(msg.get("count", 10))
+            skip = int(msg.get("skip", 0))
 
             if page_type not in ROUTES:
                 await send({"type": "error", "error": f"Unknown page type: {page_type!r}"})
@@ -269,11 +271,11 @@ async def handle_client(websocket):
 
             print(f"\n[ig-dl] {page_type.upper()}"
                   + (f" -> {msg.get('identifier')}" if msg.get("identifier") else "")
-                  + f"  (count={count})")
+                  + f"  (count={count}, skip={skip})")
 
             try:
                 result = await asyncio.get_event_loop().run_in_executor(
-                    None, lambda: ROUTES[page_type](msg, count)
+                    None, lambda: ROUTES[page_type](msg, count, skip)
                 )
                 await send({"type": "done", **result})
             except Exception as exc:
