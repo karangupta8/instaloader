@@ -541,6 +541,7 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     target_dir = args.input_dir.expanduser().resolve()
+    move_to = args.move_to.expanduser().resolve() if args.move_to else None
     if not target_dir.is_dir():
         print(f"ERROR: {target_dir} is not a directory", file=sys.stderr)
         sys.exit(1)
@@ -568,7 +569,7 @@ if __name__ == "__main__":
                 make_collage=not args.no_collage,
                 make_graphic=not args.no_graphic,
                 keep_slides=args.keep_slides,
-                move_to=args.move_to,
+                move_to=move_to,
             )
             if result:
                 print(f"    -> {result.name}")

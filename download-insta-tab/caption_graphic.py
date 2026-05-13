@@ -459,6 +459,7 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     target_dir = args.input_dir.expanduser().resolve()
+    move_to = args.move_to.expanduser().resolve() if args.move_to else None
     if not target_dir.is_dir():
         print(f"ERROR: {target_dir} is not a directory", file=sys.stderr)
         sys.exit(1)
@@ -492,11 +493,11 @@ if __name__ == "__main__":
             if result:
                 print(f"-> {result.name}")
                 processed += 1
-                if args.move_to:
-                    args.move_to.mkdir(parents=True, exist_ok=True)
+                if move_to:
+                    move_to.mkdir(parents=True, exist_ok=True)
                     try:
-                        shutil.move(str(media_path), str(args.move_to / media_path.name))
-                        shutil.move(str(txt_path), str(args.move_to / txt_path.name))
+                        shutil.move(str(media_path), str(move_to / media_path.name))
+                        shutil.move(str(txt_path), str(move_to / txt_path.name))
                     except OSError as exc:
                         logger.warning(f"Could not move files: {exc}")
                 elif args.delete:

@@ -46,7 +46,7 @@ python download-insta-tab/server.py --sessionid <YOUR_SESSIONID> --csrftoken <YO
 python download-insta-tab/server.py \
   --sessionid <YOUR_SESSIONID> \
   --csrftoken <YOUR_CSRFTOKEN> \
-  --output ~/Downloads \
+  --output C:\Users\karan\Downloads \
   --port 7432 \
   --filename-pattern "{date}_{owner_username}_{shortcode}"
 ```
@@ -157,16 +157,16 @@ Caption graphics are generated automatically during download. If you downloaded 
 
 ```bash
 # Apply caption graphics to everything in a folder that doesn't have one yet
-python download-insta-tab/caption_graphic.py ~/Downloads/_saved
+python download-insta-tab/caption_graphic.py C:\Users\karan\Downloads\_saved
 
 # Re-generate snapshots that already exist
-python download-insta-tab/caption_graphic.py ~/Downloads/_saved --overwrite
+python download-insta-tab/caption_graphic.py C:\Users\karan\Downloads\_saved --overwrite
 
 # Delete original media and .txt files after creating snapshot
-python download-insta-tab/caption_graphic.py ~/Downloads/_saved --delete
+python download-insta-tab/caption_graphic.py C:\Users\karan\Downloads\_saved --delete
 
 # Move original files to a folder instead of deleting them
-python download-insta-tab/caption_graphic.py ~/Downloads/_saved --move-to ~/Downloads/_trash
+python download-insta-tab/caption_graphic.py C:\Users\karan\Downloads\_saved --move-to C:\Users\karan\Downloads\_trash
 ```
 
 This scans for any `{name}.txt` + `{name}.{jpg|mp4|…}` pair without a matching `{name}_snapshot.*`, generates the snapshot, and can optionally **delete the original media and `.txt`** files using the `--delete` flag. Works on single posts and already-built `_carousel.*` composites alike.
@@ -186,25 +186,25 @@ It can also be run standalone on a directory of already-downloaded files to buil
 
 ```bash
 # Process all carousels found in a directory
-python download-insta-tab/carousel_processor.py ~/Downloads/_saved
+python download-insta-tab/carousel_processor.py C:\Users\karan\Downloads\_saved
 
 # One specific shortcode only
-python download-insta-tab/carousel_processor.py ~/Downloads/_saved --shortcode AbCdEfG
+python download-insta-tab/carousel_processor.py C:\Users\karan\Downloads\_saved --shortcode AbCdEfG
 
 # Skip the caption graphic
-python download-insta-tab/carousel_processor.py ~/Downloads/_saved --no-graphic
+python download-insta-tab/carousel_processor.py C:\Users\karan\Downloads\_saved --no-graphic
 
 # Skip the collage entirely (just rename/tidy files)
-python download-insta-tab/carousel_processor.py ~/Downloads/_saved --no-collage
+python download-insta-tab/carousel_processor.py C:\Users\karan\Downloads\_saved --no-collage
 
 # Keep individual slide files after compositing
-python download-insta-tab/carousel_processor.py ~/Downloads/_saved --keep-slides
+python download-insta-tab/carousel_processor.py C:\Users\karan\Downloads\_saved --keep-slides
 
 # Move individual slide files to a folder instead of deleting them
-python download-insta-tab/carousel_processor.py ~/Downloads/_saved --move-to ~/Downloads/_slides_backup
+python download-insta-tab/carousel_processor.py C:\Users\karan\Downloads\_saved --move-to C:\Users\karan\Downloads\_slides_backup
 
 # Custom cell size for the grid (default 640 px)
-python download-insta-tab/carousel_processor.py ~/Downloads/_saved --cell-size 800
+python download-insta-tab/carousel_processor.py C:\Users\karan\Downloads\_saved --cell-size 800
 ```
 
 Requires **Pillow** and **ffmpeg**.

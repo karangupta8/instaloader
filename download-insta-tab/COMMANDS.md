@@ -30,7 +30,7 @@ python download-insta-tab/server.py --sessionid "YOUR_SESSION_ID" --csrftoken "Y
 
 **Custom Output and No Post-Processing:**
 ```powershell
-python download-insta-tab/server.py --sessionid "YOUR_SESSION_ID" --csrftoken "YOUR_CSRF_TOKEN" --output ~/Downloads --no-post-process
+python download-insta-tab/server.py --sessionid "YOUR_SESSION_ID" --csrftoken "YOUR_CSRF_TOKEN" --output C:\Users\karan\Downloads --no-post-process
 ```
 
 ---
@@ -41,12 +41,12 @@ This script groups individual slide files (images/videos) into a composite grid 
 
 | Use Case | Command |
 | :--- | :--- |
-| **Default** (Collage + Graphic + Delete Slides) | `python download-insta-tab/carousel_processor.py ~/Downloads/_saved` |
-| **Keep Slides** (Don't delete originals) | `python download-insta-tab/carousel_processor.py ~/Downloads/_saved --keep-slides` |
-| **Move Slides** (Move originals instead of delete) | `python download-insta-tab/carousel_processor.py ~/Downloads/_saved --move-to ~/Downloads/_slides_backup` |
-| **No Graphic** (Don't append caption panel) | `python download-insta-tab/carousel_processor.py ~/Downloads/_saved --no-graphic` |
-| **No Collage** (Don't create the grid image) | `python download-insta-tab/carousel_processor.py ~/Downloads/_saved --no-collage` |
-| **Custom Size** (Larger cells for high-res) | `python download-insta-tab/carousel_processor.py ~/Downloads/_saved --cell-size 800` |
+| **Default** (Collage + Graphic + Delete Slides) | `python download-insta-tab/carousel_processor.py C:\Users\karan\Downloads\_saved` |
+| **Keep Slides** (Don't delete originals) | `python download-insta-tab/carousel_processor.py C:\Users\karan\Downloads\_saved --keep-slides` |
+| **Move Slides** (Move originals instead of delete) | `python download-insta-tab/carousel_processor.py C:\Users\karan\Downloads\_saved --move-to C:\Users\karan\Downloads\_slides_backup` |
+| **No Graphic** (Don't append caption panel) | `python download-insta-tab/carousel_processor.py C:\Users\karan\Downloads\_saved --no-graphic` |
+| **No Collage** (Don't create the grid image) | `python download-insta-tab/carousel_processor.py C:\Users\karan\Downloads\_saved --no-collage` |
+| **Custom Size** (Larger cells for high-res) | `python download-insta-tab/carousel_processor.py C:\Users\karan\Downloads\_saved --cell-size 800` |
 
 ---
 
@@ -56,10 +56,10 @@ This script appends the caption and comments panel to media files.
 
 | Use Case | Command |
 | :--- | :--- |
-| **Default** (Process new files only) | `python download-insta-tab/caption_graphic.py ~/Downloads/_saved` |
-| **Overwrite** (Re-generate existing snapshots) | `python download-insta-tab/caption_graphic.py ~/Downloads/_saved --overwrite` |
-| **Delete Originals** (Delete media + txt after success) | `python download-insta-tab/caption_graphic.py ~/Downloads/_saved --delete` |
-| **Move Originals** (Move instead of delete) | `python download-insta-tab/caption_graphic.py ~/Downloads/_saved --move-to ~/Downloads/_trash` |
+| **Default** (Process new files only) | `python download-insta-tab/caption_graphic.py C:\Users\karan\Downloads\_saved` |
+| **Overwrite** (Re-generate existing snapshots) | `python download-insta-tab/caption_graphic.py C:\Users\karan\Downloads\_saved --overwrite` |
+| **Delete Originals** (Delete media + txt after success) | `python download-insta-tab/caption_graphic.py C:\Users\karan\Downloads\_saved --delete` |
+| **Move Originals** (Move instead of delete) | `python download-insta-tab/caption_graphic.py C:\Users\karan\Downloads\_saved --move-to C:\Users\karan\Downloads\_trash` |
 
 ---
 
@@ -70,25 +70,25 @@ Run both scripts in sequence to fully process a folder in one go.
 ### 🗑️ Mode A: Clean Up (Delete Originals)
 Processes carousels, deletes slides, applies captions to everything, and deletes original source files.
 ```powershell
-python download-insta-tab/carousel_processor.py ~/Downloads/_saved ; python download-insta-tab/caption_graphic.py ~/Downloads/_saved --delete
+python download-insta-tab/carousel_processor.py C:\Users\karan\Downloads\_saved ; python download-insta-tab/caption_graphic.py C:\Users\karan\Downloads\_saved --delete
 ```
 
 ### 📁 Mode B: Archive (Move Originals)
 Processes carousels, moves slides to backup, applies captions, and moves originals to trash.
 ```powershell
-python download-insta-tab/carousel_processor.py ~/Downloads/_saved --move-to ~/Downloads/_slides_backup ; python download-insta-tab/caption_graphic.py ~/Downloads/_saved --move-to ~/Downloads/_trash
+python download-insta-tab/carousel_processor.py C:\Users\karan\Downloads\_saved --move-to C:\Users\karan\Downloads\_slides_backup ; python download-insta-tab/caption_graphic.py C:\Users\karan\Downloads\_saved --move-to C:\Users\karan\Downloads\_trash
 ```
 
 ### 💾 Mode C: Keep Everything
 Processes carousels and applies captions but keeps all original files in the source folder.
 ```powershell
-python download-insta-tab/carousel_processor.py ~/Downloads/_saved --keep-slides ; python download-insta-tab/caption_graphic.py ~/Downloads/_saved
+python download-insta-tab/carousel_processor.py C:\Users\karan\Downloads\_saved --keep-slides ; python download-insta-tab/caption_graphic.py C:\Users\karan\Downloads\_saved
 ```
 
 ### 🔄 Mode D: Force Re-process
 Re-generates everything even if snapshots already exist.
 ```powershell
-python download-insta-tab/carousel_processor.py ~/Downloads/_saved ; python download-insta-tab/caption_graphic.py ~/Downloads/_saved --overwrite
+python download-insta-tab/carousel_processor.py C:\Users\karan\Downloads\_saved ; python download-insta-tab/caption_graphic.py C:\Users\karan\Downloads\_saved --overwrite
 ```
 
 ---
