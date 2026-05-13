@@ -185,6 +185,18 @@ def _get_video_duration(path: Path) -> float:
         raise CarouselProcessingError(f"Failed to get duration of {path.name}: {exc}") from exc
 
 
+def _has_audio(path: Path) -> bool:
+    try:
+        result = subprocess.run(
+            ["ffprobe", "-v", "error", "-select_streams", "a", "-show_entries", "stream=index",
+             "-of", "csv=p=0", str(path)],
+            capture_output=True, text=True, check=True,
+        )
+        return len(result.stdout.strip()) > 0
+    except Exception:
+        return False
+
+
 # ── Video concatenation ────────────────────────────────────────────────────
 
 def _build_video_concat(slides: list[SlideInfo], out_path: Path, cell_size: int = 640) -> Path:
@@ -274,7 +286,7 @@ def _build_mixed_grid(
 
     audio_inputs: list[str] = []
     for i, slide in enumerate(slides):
-        if slide.is_video:
+        if slide.is_video and _has_audio(slide.path):
             filter_parts.append(
                 f"[{i}:a]aresample=44100,aformat=sample_fmts=fltp:channel_layouts=stereo[a{i}];"
             )

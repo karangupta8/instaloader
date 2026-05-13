@@ -177,9 +177,24 @@ def build_caption_panel(metadata: dict, panel_width: int):
     # Caption
     if caption.strip():
         cap_lines = _wrap_text(caption, cap_font, inner_w)
-        if len(cap_lines) > MAX_CAPTION_LINES:
-            cap_lines = cap_lines[:MAX_CAPTION_LINES]
+        
+        # Combination approach:
+        # 1. If it exceeds 6 lines at size 20, try size 16 to fit more text.
+        if len(cap_lines) > 6:
+            smaller_font = _load_font(16)
+            cap_lines_small = _wrap_text(caption, smaller_font, inner_w)
+            # If smaller font reduces lines or fits better, use it
+            if len(cap_lines_small) < len(cap_lines) or len(cap_lines_small) <= 10:
+                cap_font = smaller_font
+                cap_lines = cap_lines_small
+                cap_h = _font_height(cap_font)
+                
+        # 2. Allow it to grow taller up to 15 lines (increased from 6)
+        MAX_COMBINED_LINES = 15
+        if len(cap_lines) > MAX_COMBINED_LINES:
+            cap_lines = cap_lines[:MAX_COMBINED_LINES]
             cap_lines[-1] = cap_lines[-1].rstrip() + "…"
+            
         for line in cap_lines:
             cmds.append(("caption_line", y, {"text": line}))
             y += cap_h + LINE_SPACING
