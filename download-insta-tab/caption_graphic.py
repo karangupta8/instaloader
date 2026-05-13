@@ -9,6 +9,7 @@ alongside a downloaded image or video to produce a "snapshot" file.
 import json
 import logging
 import subprocess
+import shutil
 import tempfile
 from pathlib import Path
 
@@ -26,7 +27,7 @@ MENTION_COLOR   = (0, 53, 105)      # same blue for @user prefix in comments
 PADDING         = 10    # px margin inside panel on all sides (reduced to save space)
 CAPTION_SIZE    = 20    # pt caption font (larger)
 COMMENT_SIZE    = 20    # pt comment body font (larger)
-LIKES_SIZE      = 6    # pt likes counter (slightly larger)
+LIKES_SIZE      = 10    # pt likes counter (slightly larger)
 LINE_SPACING    = 3     # px between wrapped lines within a block
 COMMENT_GAP     = 6    # px between individual comments
 DIVIDER_MARGIN  = 7    # px above and below the horizontal rule
@@ -453,6 +454,8 @@ if __name__ == "__main__":
                         help="Re-generate snapshots that already exist")
     parser.add_argument("--delete", action="store_true",
                         help="Delete original media and .txt files after snapshot")
+    parser.add_argument("--move-to", type=Path, metavar="DIR",
+                        help="Move original files to this directory instead of deleting them")
     args = parser.parse_args()
 
     target_dir = args.input_dir.expanduser().resolve()
@@ -489,7 +492,14 @@ if __name__ == "__main__":
             if result:
                 print(f"-> {result.name}")
                 processed += 1
-                if args.delete:
+                if args.move_to:
+                    args.move_to.mkdir(parents=True, exist_ok=True)
+                    try:
+                        shutil.move(str(media_path), str(args.move_to / media_path.name))
+                        shutil.move(str(txt_path), str(args.move_to / txt_path.name))
+                    except OSError as exc:
+                        logger.warning(f"Could not move files: {exc}")
+                elif args.delete:
                     media_path.unlink()
                     txt_path.unlink()
             else:

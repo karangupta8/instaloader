@@ -164,6 +164,9 @@ python download-insta-tab/caption_graphic.py ~/Downloads/_saved --overwrite
 
 # Delete original media and .txt files after creating snapshot
 python download-insta-tab/caption_graphic.py ~/Downloads/_saved --delete
+
+# Move original files to a folder instead of deleting them
+python download-insta-tab/caption_graphic.py ~/Downloads/_saved --move-to ~/Downloads/_trash
 ```
 
 This scans for any `{name}.txt` + `{name}.{jpg|mp4|…}` pair without a matching `{name}_snapshot.*`, generates the snapshot, and can optionally **delete the original media and `.txt`** files using the `--delete` flag. Works on single posts and already-built `_carousel.*` composites alike.
@@ -196,6 +199,9 @@ python download-insta-tab/carousel_processor.py ~/Downloads/_saved --no-collage
 
 # Keep individual slide files after compositing
 python download-insta-tab/carousel_processor.py ~/Downloads/_saved --keep-slides
+
+# Move individual slide files to a folder instead of deleting them
+python download-insta-tab/carousel_processor.py ~/Downloads/_saved --move-to ~/Downloads/_slides_backup
 
 # Custom cell size for the grid (default 640 px)
 python download-insta-tab/carousel_processor.py ~/Downloads/_saved --cell-size 800

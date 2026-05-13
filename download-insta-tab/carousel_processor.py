@@ -329,6 +329,7 @@ def process_carousel_files(
     make_collage: bool = True,
     make_graphic: bool = True,
     keep_slides: bool = False,
+    move_to: Path = None,
 ) -> "Path | None":
     """
     Process a set of carousel slide files into a composite output.
@@ -370,7 +371,15 @@ def process_carousel_files(
             try:
                 result = _build_image_collage(image_slides, out_path, cell_size)
                 if not keep_slides:
-                    _delete_slides(image_slides)
+                    if move_to:
+                        move_to.mkdir(parents=True, exist_ok=True)
+                        for s in image_slides:
+                            try:
+                                shutil.move(str(s.path), str(move_to / s.path.name))
+                            except OSError as exc:
+                                logger.warning(f"Could not move slide {s.path.name}: {exc}")
+                    else:
+                        _delete_slides(image_slides)
                 _rename_companion_txt(target_dir, shortcode, result)
                 return _apply_graphic(result, target_dir, shortcode, make_graphic)
             except CarouselProcessingError as exc:
@@ -399,7 +408,15 @@ def process_carousel_files(
         composite = _build_mixed_grid(slides, out_path_mp4, cell_size, max_dur=max_dur)
 
     if not keep_slides:
-        _delete_slides(slides)
+        if move_to:
+            move_to.mkdir(parents=True, exist_ok=True)
+            for slide in slides:
+                try:
+                    shutil.move(str(slide.path), str(move_to / slide.path.name))
+                except OSError as exc:
+                    logger.warning(f"Could not move slide {slide.path.name}: {exc}")
+        else:
+            _delete_slides(slides)
     _rename_companion_txt(target_dir, shortcode, composite)
     return _apply_graphic(composite, make_graphic)
 
@@ -438,6 +455,7 @@ def process_carousel(
     cell_size: int = 640,
     make_collage: bool = True,
     make_graphic: bool = True,
+    move_to: Path = None,
 ) -> "Path | None":
     """
     Post-process a carousel instaloader Post.
@@ -485,6 +503,8 @@ def process_carousel(
         cell_size=cell_size,
         make_collage=make_collage,
         make_graphic=make_graphic,
+        keep_slides=False,
+        move_to=move_to,
     )
 
 
@@ -516,6 +536,8 @@ if __name__ == "__main__":
                         help="Collage grid cell size in pixels (default: 640)")
     parser.add_argument("--keep-slides", action="store_true",
                         help="Preserve individual slide files after creating composite")
+    parser.add_argument("--move-to", type=Path, metavar="DIR",
+                        help="Move slide files to this directory instead of deleting them")
     args = parser.parse_args()
 
     target_dir = args.input_dir.expanduser().resolve()
@@ -546,6 +568,7 @@ if __name__ == "__main__":
                 make_collage=not args.no_collage,
                 make_graphic=not args.no_graphic,
                 keep_slides=args.keep_slides,
+                move_to=args.move_to,
             )
             if result:
                 print(f"    -> {result.name}")
