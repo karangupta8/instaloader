@@ -205,26 +205,41 @@ def _build_video_concat(slides: list[SlideInfo], out_path: Path, cell_size: int 
     for slide in slides:
         inputs += ["-i", str(slide.path)]
 
+    any_audio = any(_has_audio(slide.path) for slide in slides)
+
     filter_parts: list[str] = []
     for i in range(n):
         filter_parts.append(
             f"[{i}:v]scale={cell_size}:{cell_size}:force_original_aspect_ratio=decrease,"
             f"pad={cell_size}:{cell_size}:(ow-iw)/2:(oh-ih)/2,fps=30,setsar=1[v{i}];"
         )
-        filter_parts.append(
-            f"[{i}:a]aresample=44100,aformat=sample_fmts=fltp:channel_layouts=stereo[a{i}];"
-        )
+        if any_audio:
+            if _has_audio(slides[i].path):
+                filter_parts.append(
+                    f"[{i}:a]aresample=44100,aformat=sample_fmts=fltp:channel_layouts=stereo[a{i}];"
+                )
+            else:
+                dur = _get_video_duration(slides[i].path)
+                filter_parts.append(
+                    f"anullsrc=r=44100:cl=stereo,atrim=duration={dur:.2f}[a{i}];"
+                )
+
     v_labels = "".join(f"[v{i}]" for i in range(n))
-    a_labels = "".join(f"[a{i}]" for i in range(n))
     filter_parts.append(f"{v_labels}concat=n={n}:v=1:a=0[outv];")
-    filter_parts.append(f"{a_labels}concat=n={n}:v=0:a=1[outa]")
+    
+    if any_audio:
+        a_labels = "".join(f"[a{i}]" for i in range(n))
+        filter_parts.append(f"{a_labels}concat=n={n}:v=0:a=1[outa]")
+        maps = ["-map", "[outv]", "-map", "[outa]"]
+    else:
+        maps = ["-map", "[outv]"]
 
     _run_ffmpeg([
         "ffmpeg", "-y", *inputs,
         "-filter_complex", " ".join(filter_parts),
-        "-map", "[outv]", "-map", "[outa]",
+        *maps,
         "-c:v", "libx264", "-crf", "23", "-preset", "fast",
-        "-c:a", "aac", "-b:a", "128k",
+        *(["-c:a", "aac", "-b:a", "128k"] if any_audio else []),
         "-movflags", "+faststart", str(out_path),
     ])
     return out_path
