@@ -95,3 +95,42 @@ python download-insta-tab/carousel_processor.py C:\Users\karan\Downloads\_saved 
 
 > [!TIP]
 > In PowerShell, the `;` operator runs commands sequentially regardless of success. If you are using PowerShell 7+ or classic CMD and want the second command to run **only if the first succeeds**, use `&&` instead of `;`.
+
+---
+
+## 🤖 5. Automated Tab Attachment & Injection (`inject_and_run.py`)
+
+This script automates the process of injecting `console.js` into your browser and running the `igdl` command with parameters.
+
+### ⚠️ Prerequisite: Enable Remote Debugging in Chrome
+To allow Python to talk to your open browser tabs, you must start Chrome with remote debugging enabled.
+
+**Method A: Windows Run Dialog (Easiest)**
+1. Close all open Chrome windows completely.
+2. Press `Win + R` to open the Run dialog.
+3. Type: `chrome.exe --remote-debugging-port=9222` and press Enter.
+
+**Method B: PowerShell**
+Run the following command (replace path if Chrome is installed elsewhere):
+```powershell
+& "C:\Program Files\Google\Chrome\Application\chrome.exe" --remote-debugging-port=9222
+```
+
+### Usage:
+
+1. **Make sure the server is running** (Section 1).
+2. **Run the injection script**:
+   ```powershell
+   python download-insta-tab/inject_and_run.py --count 10 --skip 0
+   ```
+
+### Arguments:
+| Argument | Description |
+| :--- | :--- |
+| `--count` | Number of posts to download (default: 10) |
+| `--skip` | Number of posts to skip (default: 0) |
+| `--port` | Server port (default: 7432) |
+| `--tab` | Index of the tab to attach to (0-based) |
+| `--url` | CDP URL (default: http://localhost:9222) |
+
+If you don't provide `--tab`, the script will list all open tabs and ask you to select one interactively.

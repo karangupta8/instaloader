@@ -211,6 +211,26 @@ Requires **Pillow** and **ffmpeg**.
 
 ---
 
+## Automated Injection (`inject_and_run.py`)
+
+Instead of manually copying and pasting `console.js` into the browser console, you can use `inject_and_run.py` to automate the process.
+
+This script connects to your running Chrome instance, lists your open tabs, injects the script, and runs the `igdl` command with parameters.
+
+Requires starting Chrome with remote debugging enabled:
+```powershell
+chrome.exe --remote-debugging-port=9222
+```
+
+Then run:
+```powershell
+python download-insta-tab/inject_and_run.py --count 10 --skip 0
+```
+
+See `COMMANDS.md` for full details and arguments.
+
+---
+
 ## Files
 
 | File | Purpose |
@@ -219,6 +239,7 @@ Requires **Pillow** and **ffmpeg**.
 | `console.js` | Paste into DevTools on any Instagram page |
 | `carousel_processor.py` | Carousel collage builder; also runnable as a standalone CLI |
 | `caption_graphic.py` | Generates Instagram-style caption+comments panel and appends it to media |
+| `inject_and_run.py` | Automates script injection and execution via CDP |
 | `instagram-page-downloader.js` | Legacy standalone browser-only script (deprecated) |
 
 ---
@@ -231,10 +252,11 @@ Requires **Pillow** and **ffmpeg**.
 | `websockets` | WebSocket server |
 | `Pillow` | Image collage and caption panel |
 | `ffmpeg` (system) | Video concat and caption panel on videos |
+| `playwright` | Automated script injection |
 
 Install Python dependencies:
 ```bash
-pip install instaloader websockets Pillow
+pip install instaloader websockets Pillow playwright
 ```
 
 ---
