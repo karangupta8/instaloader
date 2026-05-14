@@ -89,7 +89,10 @@ def load_metadata(txt_path: Path) -> dict:
     Returns {"caption": str, "top_comments": list} or {} on failure.
     """
     try:
-        return json.loads(txt_path.read_text(encoding="utf-8"))
+        data = json.loads(txt_path.read_text(encoding="utf-8"))
+        if isinstance(data, dict) and "username" not in data:
+            data["username"] = txt_path.stem.split("_")[0]
+        return data
     except (OSError, json.JSONDecodeError) as exc:
         logger.warning(f"Could not load metadata from {txt_path.name}: {exc}")
         return {}
@@ -176,28 +179,59 @@ def build_caption_panel(metadata: dict, panel_width: int):
 
     # Caption
     if caption.strip():
+        post_username = metadata.get("username") or "user"
+        prefix = f"{post_username}  "
+        prefix_w = _text_width(prefix, cap_font_b)
+        
         cap_lines = _wrap_text(caption, cap_font, inner_w)
         
-        # Combination approach:
-        # 1. If it exceeds 6 lines at size 20, try size 16 to fit more text.
+        # Font scaling logic
         if len(cap_lines) > 6:
             smaller_font = _load_font(16)
             cap_lines_small = _wrap_text(caption, smaller_font, inner_w)
-            # If smaller font reduces lines or fits better, use it
             if len(cap_lines_small) < len(cap_lines) or len(cap_lines_small) <= 10:
                 cap_font = smaller_font
+                cap_font_b = _load_font(16, bold=True)
                 cap_lines = cap_lines_small
                 cap_h = _font_height(cap_font)
+                prefix_w = _text_width(prefix, cap_font_b)
                 
-        # 2. Allow it to grow taller up to 15 lines (increased from 6)
-        MAX_COMBINED_LINES = 15
-        if len(cap_lines) > MAX_COMBINED_LINES:
-            cap_lines = cap_lines[:MAX_COMBINED_LINES]
-            cap_lines[-1] = cap_lines[-1].rstrip() + "…"
-            
-        for line in cap_lines:
+        # Special wrapping for first line
+        paragraphs = caption.split("\n")
+        first_para = paragraphs[0]
+        
+        words = first_para.split(" ") if first_para.strip() else [""]
+        first_line_words = []
+        current_text = ""
+        remaining_words = words
+        
+        for i, word in enumerate(words):
+            test = f"{current_text} {word}".strip() if current_text else word
+            if _text_width(test, cap_font) <= inner_w - prefix_w:
+                current_text = test
+                first_line_words.append(word)
+            else:
+                remaining_words = words[i:]
+                break
+                
+        first_line_text = " ".join(first_line_words)
+        rest_of_first_para = " ".join(remaining_words)
+        
+        rest_caption_parts = []
+        if rest_of_first_para.strip():
+            rest_caption_parts.append(rest_of_first_para)
+        rest_caption_parts.extend(paragraphs[1:])
+        
+        rest_caption = "\n".join(rest_caption_parts)
+        rest_lines = _wrap_text(rest_caption, cap_font, inner_w) if rest_caption.strip() else []
+        
+        cmds.append(("caption_first", y, {"prefix": prefix, "line": first_line_text}))
+        y += cap_h + LINE_SPACING
+        
+        for line in rest_lines:
             cmds.append(("caption_line", y, {"text": line}))
             y += cap_h + LINE_SPACING
+            
         y += DIVIDER_MARGIN - LINE_SPACING
 
     # Divider (only if there are comments)
@@ -247,7 +281,13 @@ def build_caption_panel(metadata: dict, panel_width: int):
     for kind, cy, data in cmds:
         x = PADDING
 
-        if kind == "caption_line":
+        if kind == "caption_first":
+            draw.text((x, cy), data["prefix"], font=cap_font_b, fill=TEXT_COLOR)
+            prefix_w = _text_width(data["prefix"], cap_font_b)
+            _draw_colored_line(draw, data["line"], x + prefix_w, cy, cap_font, TEXT_COLOR,
+                                hashtag_color=HASHTAG_COLOR, mention_color=HASHTAG_COLOR)
+
+        elif kind == "caption_line":
             # Draw word by word to colour #hashtag and @mentions
             _draw_colored_line(draw, data["text"], x, cy, cap_font, TEXT_COLOR,
                                hashtag_color=HASHTAG_COLOR, mention_color=HASHTAG_COLOR)
