@@ -192,6 +192,28 @@ def _handle_saved(count: int, skip: int = 0) -> dict:
     return {"downloaded": downloaded, "target": str(target_dir)}
 
 
+def _handle_collection(identifiers: list, count: int, skip: int = 0) -> dict:
+    folder_name = _get_saved_dir_name()
+    target_dir = _output_dir / folder_name
+    to_download = identifiers[skip : skip + count]
+    print(f"  Collection: downloading {len(to_download)} shortcodes to {target_dir} (skipped {skip})")
+    downloaded = 0
+    for shortcode in to_download:
+        try:
+            post = instaloader.Post.from_shortcode(_loader.context, shortcode)
+            print(f"  [{downloaded+1}] {post.shortcode}", end="  ")
+            _loader.download_post(post, target=folder_name)
+            txt_path = target_dir / f"{post.owner_username}_{post.shortcode}.txt"
+            _save_post_metadata(post, txt_path)
+            _maybe_create_snapshot(post, target_dir)
+            _maybe_process_carousel(post, target_dir)
+            downloaded += 1
+            print()
+        except Exception as e:
+            print(f"\nError downloading {shortcode}: {e}")
+    return {"downloaded": downloaded, "target": str(target_dir)}
+
+
 def _handle_hashtag(identifier: str, count: int, skip: int = 0) -> dict:
     tag = identifier.lstrip("#")
     folder_name = f"#{tag}"
@@ -229,6 +251,7 @@ ROUTES = {
     "saved":    lambda d, c, s: _handle_saved(c, s),
     "hashtag":  lambda d, c, s: _handle_hashtag(d["identifier"], c, s),
     "post":     lambda d, c, s: _handle_post(d["identifier"]),
+    "collection": lambda d, c, s: _handle_collection(d["identifiers"], c, s),
 }
 
 

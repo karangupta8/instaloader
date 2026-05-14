@@ -35,7 +35,16 @@ async function igdl(countOrOptions = 10, skip = 0) {
   const hashtagMatch = path.match(/^\/explore\/tags\/([^/]+)$/);
   if (hashtagMatch) pageInfo = { page_type: "hashtag", identifier: hashtagMatch[1] };
 
-  if (!pageInfo && path.match(/\/saved(\/|$)/))
+  const pathParts = path.split("/").filter(Boolean);
+  if (!pageInfo && pathParts.length >= 3 && pathParts[1] === "saved") {
+    const links = Array.from(document.querySelectorAll('a[href*="/p/"], a[href*="/reel/"]'));
+    const shortcodes = links.map(a => {
+      const m = a.href.match(/\/(p|reel)\/([A-Za-z0-9_-]+)\//);
+      return m ? m[2] : null;
+    }).filter(Boolean);
+    pageInfo = { page_type: "collection", identifiers: [...new Set(shortcodes)] };
+    console.log(`[ig-dl] Scraped ${pageInfo.identifiers.length} shortcodes from collection page`);
+  } else if (!pageInfo && path.match(/\/saved(\/|$)/))
     pageInfo = { page_type: "saved" };
 
   if (!pageInfo) {
