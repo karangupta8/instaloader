@@ -540,6 +540,19 @@ if __name__ == "__main__":
 
         if snapshot_path.exists() and not args.overwrite:
             skipped += 1
+            if move_to:
+                move_to.mkdir(parents=True, exist_ok=True)
+                try:
+                    shutil.move(str(media_path), str(move_to / media_path.name))
+                    shutil.move(str(txt_path), str(move_to / txt_path.name))
+                except OSError as exc:
+                    logger.warning(f"Could not move files: {exc}")
+            elif args.delete:
+                try:
+                    media_path.unlink()
+                    txt_path.unlink()
+                except OSError as exc:
+                    logger.warning(f"Could not delete files: {exc}")
             continue
 
         try:
