@@ -41,7 +41,27 @@ class SlideInfo:
 
 # ── File discovery ─────────────────────────────────────────────────────────
 
-SLIDE_PATTERN = re.compile(r"^.+_([A-Za-z0-9_-]+)_(\d+)\.(jpg|jpeg|webp|mp4|mov)$")
+# Captures "{owner_username}_{shortcode}" as one stem, deliberately not split here:
+# both owner usernames and shortcodes can contain underscores (e.g. shortcode
+# "Dcc_xjNEmre"), so a single capture group for both would be ambiguous. The
+# trailing "_(\d+)\.ext" is unambiguous because greedy backtracking always finds
+# the rightmost "_<digits>.<ext>", which is exactly the slide index suffix.
+SLIDE_PATTERN = re.compile(r"^(.+)_(\d+)\.(jpg|jpeg|webp|mp4|mov)$")
+
+
+def _split_owner_shortcode(stem: str) -> tuple[str, str]:
+    """Split a "{owner_username}_{shortcode}" stem into its two parts.
+
+    Instagram shortcodes have consistently been 11 characters (both the
+    legacy and current encoding), which is used to find the boundary
+    reliably even when the shortcode itself contains an underscore — a
+    plain "last underscore" split would cut it in the wrong place.
+    """
+    if len(stem) > 12 and stem[-12] == "_":
+        return stem[:-12], stem[-11:]
+    if "_" in stem:
+        return tuple(stem.rsplit("_", 1))
+    return "unknown", stem
 
 
 def find_carousel_files(target_dir: Path, shortcode: str) -> list[SlideInfo]:
@@ -50,11 +70,12 @@ def find_carousel_files(target_dir: Path, shortcode: str) -> list[SlideInfo]:
     Returns slides sorted by index (1, 2, 3, ...).
     """
     matched: list[tuple[int, Path, bool]] = []
+    suffix = f"_{shortcode}"
     for f in target_dir.iterdir():
         if not f.is_file():
             continue
         m = SLIDE_PATTERN.match(f.name)
-        if m and m.group(1) == shortcode:
+        if m and m.group(1).endswith(suffix):
             slide_num = int(m.group(2))
             is_video = m.group(3) in ("mp4", "mov")
             matched.append((slide_num, f, is_video))
@@ -73,7 +94,7 @@ def _scan_directory_for_carousels(target_dir: Path) -> dict[str, list[SlideInfo]
             continue
         m = SLIDE_PATTERN.match(f.name)
         if m:
-            shortcode = m.group(1)
+            _, shortcode = _split_owner_shortcode(m.group(1))
             slide_num = int(m.group(2))
             is_video  = m.group(3) in ("mp4", "mov")
             groups[shortcode].append((slide_num, f, is_video))
