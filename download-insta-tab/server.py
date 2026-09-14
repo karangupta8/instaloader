@@ -20,8 +20,10 @@ import itertools
 import json
 import logging
 import platform
+import re
 import sys
 import traceback
+import urllib.parse
 from pathlib import Path
 
 # Suppress "opening handshake failed" noise from browsers probing the port
@@ -44,6 +46,7 @@ _authenticated: bool = False
 _skip_post_process: bool = False
 _skip_collage: bool = False
 _skip_graphic: bool = False
+_delete_originals: bool = False
 
 
 def _get_saved_dir_name() -> str:
@@ -53,6 +56,13 @@ def _get_saved_dir_name() -> str:
 
 
 # ── Session management ───────────────────────────────────────────────────────
+
+def _user_id_from_sessionid(sessionid: str) -> int | None:
+    """Instagram's sessionid cookie is "<user_id>:<token>:<version>:<hash>" (colons may be
+    percent-encoded), so the numeric user id can be read straight out of it with no extra request."""
+    match = re.match(r"^(\d+)[:%]", urllib.parse.unquote(sessionid))
+    return int(match.group(1)) if match else None
+
 
 def _authenticate(sessionid: str, csrftoken: str) -> str:
     """Build an instaloader session from cookie values."""
@@ -70,6 +80,14 @@ def _authenticate(sessionid: str, csrftoken: str) -> str:
         raise ValueError("Session cookies are invalid or expired. Re-copy from DevTools and try again.")
 
     _loader.context.username = test_user
+    # login() normally sets this from Instagram's response; load_session() (raw cookies) doesn't,
+    # so the iPhone comments endpoint (used for posts with many comments) sends "ig-intended-user-id: None"
+    # and Instagram rejects it with a generic "fail" response. Parse it from the sessionid cookie instead
+    # of querying the profile endpoint, which is a separate call that gets rate-limited (429) quickly.
+    user_id = _user_id_from_sessionid(sessionid)
+    if user_id is None:
+        raise ValueError("Could not parse a user id out of --sessionid; make sure you copied the full cookie value.")
+    _loader.context.user_id = user_id
     _authenticated = True
     print(f"[ig-dl] Authenticated as @{test_user}")
     return test_user
@@ -124,6 +142,12 @@ def _maybe_create_snapshot(post, target_dir: Path) -> None:
                 result = caption_graphic.create_snapshot(candidate, txt_path, snapshot_path)
                 if result:
                     print(f"  Snapshot: {result.name}")
+                    if _delete_originals:
+                        try:
+                            candidate.unlink()
+                            txt_path.unlink()
+                        except OSError as exc:
+                            print(f"  [snapshot] Could not delete originals: {exc}", file=sys.stderr)
             except caption_graphic.CaptionGraphicError as exc:
                 print(f"  [snapshot] ERROR: {exc}", file=sys.stderr)
             except Exception as exc:
@@ -140,6 +164,7 @@ def _maybe_process_carousel(post, target_dir: Path) -> None:
             post, target_dir,
             make_collage=not _skip_collage,
             make_graphic=not _skip_graphic,
+            delete_originals=_delete_originals,
         )
         if result:
             print(f"  Carousel: {result.name}")
@@ -340,12 +365,20 @@ def main():
                         help="Skip carousel collage/concat")
     parser.add_argument("--no-graphic", action="store_true",
                         help="Skip caption graphic snapshot")
+    parser.add_argument("--delete-originals", action="store_true",
+                        help="Delete original media/composite and .txt once a snapshot is "
+                             "created, keeping only the final _snapshot file per post")
     args = parser.parse_args()
 
-    global _skip_post_process, _skip_collage, _skip_graphic
+    global _skip_post_process, _skip_collage, _skip_graphic, _delete_originals
     _skip_post_process = args.no_post_process
     _skip_collage      = args.no_collage
     _skip_graphic      = args.no_graphic
+    _delete_originals  = args.delete_originals
+
+    if _delete_originals and (_skip_post_process or _skip_graphic):
+        print("[ig-dl] WARNING: --delete-originals has no effect without snapshots "
+              "(--no-post-process/--no-graphic disables snapshot creation)", file=sys.stderr)
 
     _output_dir = Path(args.output).expanduser().resolve()
     _output_dir.mkdir(parents=True, exist_ok=True)

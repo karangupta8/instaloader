@@ -357,6 +357,7 @@ def process_carousel_files(
     make_graphic: bool = True,
     keep_slides: bool = False,
     move_to: Path = None,
+    delete_originals: bool = False,
 ) -> "Path | None":
     """
     Process a set of carousel slide files into a composite output.
@@ -370,6 +371,8 @@ def process_carousel_files(
         make_collage:   Build the collage/video composite
         make_graphic:   Append caption+comments panel to the composite
         keep_slides:    If False, delete individual slides after composite is built
+        delete_originals: If True, delete the composite and its .txt once a snapshot
+                          is created, leaving only the final snapshot file
 
     Returns:
         Path to the composite (or snapshot) on success, None if skipped.
@@ -408,7 +411,7 @@ def process_carousel_files(
                     else:
                         _delete_slides(image_slides)
                 _rename_companion_txt(target_dir, shortcode, result)
-                return _apply_graphic(result, target_dir, shortcode, make_graphic)
+                return _apply_graphic(result, make_graphic, delete_originals)
             except CarouselProcessingError as exc:
                 logger.warning(f"Image collage failed: {exc}")
         return None
@@ -445,14 +448,19 @@ def process_carousel_files(
         else:
             _delete_slides(slides)
     _rename_companion_txt(target_dir, shortcode, composite)
-    return _apply_graphic(composite, make_graphic)
+    return _apply_graphic(composite, make_graphic, delete_originals)
 
 
 def _apply_graphic(
     composite: Path,
     make_graphic: bool,
+    delete_originals: bool = False,
 ) -> Path:
-    """Optionally append caption panel to composite. Returns composite path."""
+    """Optionally append caption panel to composite. Returns composite path.
+
+    If delete_originals is True and a snapshot is successfully created, the composite
+    and its companion .txt are removed afterward, leaving only the final snapshot file.
+    """
     if not make_graphic:
         return composite
 
@@ -467,6 +475,12 @@ def _apply_graphic(
         result = caption_graphic.create_snapshot(composite, txt_path, snapshot_path)
         if result:
             logger.debug(f"Snapshot created: {result.name}")
+            if delete_originals:
+                try:
+                    composite.unlink()
+                    txt_path.unlink()
+                except OSError as exc:
+                    logger.warning(f"Could not delete originals for {composite.name}: {exc}")
     except Exception as exc:
         logger.warning(f"Caption graphic failed for {composite.name}: {exc}")
 
@@ -483,6 +497,7 @@ def process_carousel(
     make_collage: bool = True,
     make_graphic: bool = True,
     move_to: Path = None,
+    delete_originals: bool = False,
 ) -> "Path | None":
     """
     Post-process a carousel instaloader Post.
@@ -493,6 +508,8 @@ def process_carousel(
         cell_size:   Grid cell size in pixels
         make_collage: Build composite
         make_graphic: Append caption panel
+        delete_originals: If True, delete the composite and its .txt once a snapshot
+                          is created, leaving only the final snapshot file
 
     Returns:
         Path to composite on success, None if skipped.
@@ -532,6 +549,7 @@ def process_carousel(
         make_graphic=make_graphic,
         keep_slides=False,
         move_to=move_to,
+        delete_originals=delete_originals,
     )
 
 
@@ -565,6 +583,9 @@ if __name__ == "__main__":
                         help="Preserve individual slide files after creating composite")
     parser.add_argument("--move-to", type=Path, metavar="DIR",
                         help="Move slide files to this directory instead of deleting them")
+    parser.add_argument("--delete-originals", action="store_true",
+                        help="Delete the composite and its .txt once a snapshot is created, "
+                             "leaving only the final _carousel_snapshot file")
     args = parser.parse_args()
 
     target_dir = args.input_dir.expanduser().resolve()
@@ -597,6 +618,7 @@ if __name__ == "__main__":
                 make_graphic=not args.no_graphic,
                 keep_slides=args.keep_slides,
                 move_to=move_to,
+                delete_originals=args.delete_originals,
             )
             if result:
                 print(f"    -> {result.name}")

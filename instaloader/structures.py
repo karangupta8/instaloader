@@ -853,19 +853,33 @@ class Post:
             # If the Post's metadata already contains all parent comments, don't do GraphQL requests to obtain them
             return [_postcomment(comment['node']) for comment in comment_edges]
 
-        if self.comments > NodeIterator.page_length():
-            # comments pagination via our graphql query does not work reliably anymore (issue #2125), fallback to an
-            # iphone endpoint if needed.
-            return self._get_comments_via_iphone_endpoint()
+        def _graphql_comments() -> Iterator[PostComment]:
+            return NodeIterator(
+                self._context,
+                '97b41c52301f77ce508f55e66d17620e',
+                lambda d: d['data']['shortcode_media']['edge_media_to_parent_comment'],
+                _postcomment,
+                {'shortcode': self.shortcode},
+                'https://www.instagram.com/p/{0}/'.format(self.shortcode),
+            )
 
-        return NodeIterator(
-            self._context,
-            '97b41c52301f77ce508f55e66d17620e',
-            lambda d: d['data']['shortcode_media']['edge_media_to_parent_comment'],
-            _postcomment,
-            {'shortcode': self.shortcode},
-            'https://www.instagram.com/p/{0}/'.format(self.shortcode),
-        )
+        def _comments_with_iphone_fallback() -> Iterator[PostComment]:
+            # Try GraphQL first: it works for both small and large comment counts. The iphone
+            # endpoint (issue #2125 fallback) is itself unreliable and returns a "fail" status for
+            # some posts (issue #2635), so it is now only used if GraphQL itself fails outright.
+            iterator = _graphql_comments()
+            try:
+                first = next(iterator)
+            except StopIteration:
+                return
+            except (ConnectionException, QueryReturnedBadRequestException,
+                    QueryReturnedForbiddenException):
+                yield from self._get_comments_via_iphone_endpoint()
+                return
+            yield first
+            yield from iterator
+
+        return _comments_with_iphone_fallback()
 
     def get_likes(self) -> Iterator['Profile']:
         """

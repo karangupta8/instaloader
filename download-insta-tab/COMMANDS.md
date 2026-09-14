@@ -6,6 +6,22 @@ Run these commands from the root directory of the project (`d:\ProjStuff\instalo
 
 ---
 
+## 🔑 0. Getting `--sessionid` and `--csrftoken`
+
+Every script below that talks to Instagram needs these two cookies from an active, logged-in browser session. They expire after weeks to months — if a script reports "Session cookies are invalid or expired", just repeat these steps to get fresh ones.
+
+1. Open **instagram.com** in Chrome and make sure you're logged in.
+2. Press `F12` to open DevTools.
+3. Go to the **Application** tab → **Storage** → **Cookies** → `https://www.instagram.com`.
+4. Find the row named `sessionid` and copy its **Value** column.
+5. Find the row named `csrftoken` and copy its **Value** column.
+6. Paste both into the `--sessionid` / `--csrftoken` flags of whichever command you're running.
+
+> [!WARNING]
+> These cookies grant full access to your Instagram account. Don't share them, commit them to git, or paste them anywhere untrusted. `keys.txt` in this folder is already git-ignored for storing your own working set — treat it as a secret.
+
+---
+
 ## 🚀 1. Running the Server
 
 Start the WebSocket server to listen for downloads from the browser console. Both `--sessionid` and `--csrftoken` are **required**.
@@ -20,6 +36,7 @@ Start the WebSocket server to listen for downloads from the browser console. Bot
 | `--no-post-process`| Skip all post-processing (collage + caption graphic) |
 | `--no-collage` | Skip carousel collage/concat |
 | `--no-graphic` | Skip caption graphic snapshot |
+| `--delete-originals` | Delete original media/composite + `.txt` once a snapshot is created, keeping only the final `_snapshot` file per post |
 
 ### Examples:
 
@@ -31,6 +48,11 @@ python download-insta-tab/server.py --sessionid "YOUR_SESSION_ID" --csrftoken "Y
 **Custom Output and No Post-Processing:**
 ```powershell
 python download-insta-tab/server.py --sessionid "YOUR_SESSION_ID" --csrftoken "YOUR_CSRF_TOKEN" --output C:\Users\karan\Downloads --no-post-process
+```
+
+**Only keep the final snapshot file per post (no intermediate media/composite/txt left behind):**
+```powershell
+python download-insta-tab/server.py --sessionid "YOUR_SESSION_ID" --csrftoken "YOUR_CSRF_TOKEN" --output C:\Users\karan\Downloads --delete-originals
 ```
 
 ---
@@ -47,6 +69,7 @@ This script groups individual slide files (images/videos) into a composite grid 
 | **No Graphic** (Don't append caption panel) | `python download-insta-tab/carousel_processor.py C:\Users\karan\Downloads\_saved --no-graphic` |
 | **No Collage** (Don't create the grid image) | `python download-insta-tab/carousel_processor.py C:\Users\karan\Downloads\_saved --no-collage` |
 | **Custom Size** (Larger cells for high-res) | `python download-insta-tab/carousel_processor.py C:\Users\karan\Downloads\_saved --cell-size 800` |
+| **Delete Originals** (Keep only the final `_carousel_snapshot` file) | `python download-insta-tab/carousel_processor.py C:\Users\karan\Downloads\_saved --delete-originals` |
 
 ---
 
@@ -98,7 +121,39 @@ python download-insta-tab/carousel_processor.py C:\Users\karan\Downloads\_saved 
 
 ---
 
-## 🤖 5. Automated Tab Attachment & Injection (`inject_and_run.py`)
+## 💬 5. Scraping All Comments (`scrape_comments.py`)
+
+Downloads **every** comment (and reply) on a single post to a plain `.txt` file. Unlike the server's automatic metadata (which only keeps the top 5 comments per post), this pulls the full thread. Requires `--sessionid`/`--csrftoken` (see Section 0) since Instagram doesn't expose comments anonymously.
+
+### Arguments:
+| Argument | Description |
+| :--- | :--- |
+| `post` | **Required** (positional). Shortcode or full URL, e.g. `AbCdEfG` or `https://instagram.com/p/AbCdEfG/` |
+| `--sessionid` | **Required**. Instagram sessionid cookie value |
+| `--csrftoken` | **Required**. Instagram csrftoken cookie value |
+| `--output` or `-o` | Output `.txt` path (default: `<shortcode>_comments.txt` in the current dir) |
+| `--max-comments` or `-n` | Only fetch the top N top-level comments (default: all of them) |
+
+### Examples:
+
+**Basic (writes `AbCdEfG_comments.txt` in the current directory):**
+```powershell
+python download-insta-tab/scrape_comments.py AbCdEfG --sessionid "YOUR_SESSION_ID" --csrftoken "YOUR_CSRF_TOKEN"
+```
+
+**Full URL + custom output path:**
+```powershell
+python download-insta-tab/scrape_comments.py "https://instagram.com/p/AbCdEfG/" --sessionid "YOUR_SESSION_ID" --csrftoken "YOUR_CSRF_TOKEN" --output C:\Users\karan\Downloads\comments.txt
+```
+
+**Just the top 150 comments (faster on posts with hundreds/thousands of comments):**
+```powershell
+python download-insta-tab/scrape_comments.py AbCdEfG --sessionid "YOUR_SESSION_ID" --csrftoken "YOUR_CSRF_TOKEN" --max-comments 150
+```
+
+---
+
+## 🤖 6. Automated Tab Attachment & Injection (`inject_and_run.py`)
 
 This script automates the process of injecting `console.js` into your browser and running the `igdl` command with parameters.
 

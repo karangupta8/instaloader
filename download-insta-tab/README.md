@@ -114,6 +114,7 @@ For each downloaded post you get:
 | `--no-post-process` | off | Skip all post-processing (collage + caption graphic) |
 | `--no-collage` | off | Skip carousel collage/concat only |
 | `--no-graphic` | off | Skip caption graphic snapshot only |
+| `--delete-originals` | off | Delete original media/composite + `.txt` once a snapshot is created, keeping only the final `_snapshot` file per post |
 
 **Filename pattern tokens:** `{date}`, `{owner_username}`, `{shortcode}`, `{mediaid}`, etc.
 
@@ -126,6 +127,9 @@ python download-insta-tab/server.py ... --no-graphic
 
 # Graphics yes, but no carousel collages
 python download-insta-tab/server.py ... --no-collage
+
+# Keep only the final snapshot per post, delete originals/composite/txt as it goes
+python download-insta-tab/server.py ... --delete-originals
 ```
 
 ---
@@ -205,6 +209,9 @@ python download-insta-tab/carousel_processor.py C:\Users\karan\Downloads\_saved 
 
 # Custom cell size for the grid (default 640 px)
 python download-insta-tab/carousel_processor.py C:\Users\karan\Downloads\_saved --cell-size 800
+
+# Delete the composite + its .txt once a snapshot is created, keeping only _carousel_snapshot.*
+python download-insta-tab/carousel_processor.py C:\Users\karan\Downloads\_saved --delete-originals
 ```
 
 Requires **Pillow** and **ffmpeg**.
@@ -239,6 +246,7 @@ See `COMMANDS.md` for full details and arguments.
 | `console.js` | Paste into DevTools on any Instagram page |
 | `carousel_processor.py` | Carousel collage builder; also runnable as a standalone CLI |
 | `caption_graphic.py` | Generates Instagram-style caption+comments panel and appends it to media |
+| `scrape_comments.py` | Dumps every comment (and reply) on a single post to a `.txt` file |
 | `inject_and_run.py` | Automates script injection and execution via CDP |
 | `instagram-page-downloader.js` | Legacy standalone browser-only script (deprecated) |
 
@@ -268,3 +276,4 @@ pip install instaloader websockets Pillow playwright
 - `--no-post-process` overrides `--no-collage` and `--no-graphic` — when set, nothing extra runs.
 - If `--no-collage` is set but `--no-graphic` is not, no graphic is generated for carousel posts (there is no composite to attach it to).
 - Saved posts use `_saved` as the folder name on Windows (`:` is not allowed in Windows directory names).
+- `--delete-originals` only deletes a post's pre-snapshot files (media/composite + `.txt`) *after* its snapshot is successfully created, so a post never loses its files if snapshot generation fails; it has no effect if `--no-post-process` or `--no-graphic` disables snapshots.
