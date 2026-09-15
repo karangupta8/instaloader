@@ -277,3 +277,4 @@ pip install instaloader websockets Pillow playwright
 - If `--no-collage` is set but `--no-graphic` is not, no graphic is generated for carousel posts (there is no composite to attach it to).
 - Saved posts use `_saved` as the folder name on Windows (`:` is not allowed in Windows directory names).
 - `--delete-originals` only deletes a post's pre-snapshot files (media/composite + `.txt`) *after* its snapshot is successfully created, so a post never loses its files if snapshot generation fails; it has no effect if `--no-post-process` or `--no-graphic` disables snapshots.
+- Every file's modified time is stamped with its download order (not Instagram's default of the post's original creation date), so sorting a folder by "Date Modified" in a file explorer reproduces the order posts appeared on the source page (e.g. most-recently-saved-first for Saved posts) — handy for working through Saved posts and unsaving them as you go, without checking each one's thumbnail.

@@ -19,9 +19,11 @@ import http
 import itertools
 import json
 import logging
+import os
 import platform
 import re
 import sys
+import time
 import traceback
 import urllib.parse
 from pathlib import Path
@@ -155,6 +157,22 @@ def _maybe_create_snapshot(post, target_dir: Path) -> None:
             return
 
 
+def _stamp_download_order(target_dir: Path, post, order_ts: float) -> None:
+    """Set mtime of every file belonging to this post to order_ts.
+
+    download_post() (and our own snapshot/carousel steps) leave each file's mtime set to
+    the post's original Instagram creation date, which has nothing to do with the order
+    posts were saved/downloaded in. Overwriting it with a strictly increasing per-download
+    timestamp means sorting a folder by "Date Modified" in a file explorer reproduces the
+    exact download order (== the order posts appeared on the source page at download time).
+    """
+    for f in target_dir.glob(f"{post.owner_username}_{post.shortcode}*"):
+        try:
+            os.utime(f, (order_ts, order_ts))
+        except OSError as exc:
+            print(f"  [order] Could not set mtime on {f.name}: {exc}", file=sys.stderr)
+
+
 def _maybe_process_carousel(post, target_dir: Path) -> None:
     """Non-fatal carousel post-processing step."""
     if _skip_post_process:
@@ -187,6 +205,7 @@ def _handle_profile(identifier: str, count: int, skip: int = 0) -> dict:
     print(f"  Profile : {profile.full_name} (@{profile.username}), {profile.mediacount} posts")
     print(f"  Target  : {target_dir}  ({actual} posts, skipped {skip})")
     downloaded = 0
+    order_ts = time.time()
     for post in itertools.islice(profile.get_posts(), skip, skip + count):
         downloaded += 1
         print(f"  [{downloaded}/{actual}] {post.shortcode}", end="  ")
@@ -195,6 +214,7 @@ def _handle_profile(identifier: str, count: int, skip: int = 0) -> dict:
         _save_post_metadata(post, txt_path)
         _maybe_create_snapshot(post, target_dir)
         _maybe_process_carousel(post, target_dir)
+        _stamp_download_order(target_dir, post, order_ts + downloaded)
         print()
     return {"downloaded": downloaded, "target": str(target_dir)}
 
@@ -205,6 +225,7 @@ def _handle_saved(count: int, skip: int = 0) -> dict:
     target_dir = _output_dir / folder_name
     print(f"  Saved posts for @{profile.username} (count={count}, skip={skip})")
     downloaded = 0
+    order_ts = time.time()
     for post in itertools.islice(profile.get_saved_posts(), skip, skip + count):
         downloaded += 1
         print(f"  [{downloaded}] {post.shortcode}", end="  ")
@@ -213,6 +234,10 @@ def _handle_saved(count: int, skip: int = 0) -> dict:
         _save_post_metadata(post, txt_path)
         _maybe_create_snapshot(post, target_dir)
         _maybe_process_carousel(post, target_dir)
+        # Saved posts are downloaded in the same order they appear on your Saved page
+        # (most recently saved first), so stamping mtime by download sequence means
+        # sorting the folder by "Date Modified" reproduces that same order.
+        _stamp_download_order(target_dir, post, order_ts + downloaded)
         print()
     return {"downloaded": downloaded, "target": str(target_dir)}
 
@@ -223,6 +248,7 @@ def _handle_collection(identifiers: list, count: int, skip: int = 0) -> dict:
     to_download = identifiers[skip : skip + count]
     print(f"  Collection: downloading {len(to_download)} shortcodes to {target_dir} (skipped {skip})")
     downloaded = 0
+    order_ts = time.time()
     for shortcode in to_download:
         try:
             post = instaloader.Post.from_shortcode(_loader.context, shortcode)
@@ -233,6 +259,7 @@ def _handle_collection(identifiers: list, count: int, skip: int = 0) -> dict:
             _maybe_create_snapshot(post, target_dir)
             _maybe_process_carousel(post, target_dir)
             downloaded += 1
+            _stamp_download_order(target_dir, post, order_ts + downloaded)
             print()
         except Exception as e:
             print(f"\nError downloading {shortcode}: {e}")
@@ -246,6 +273,7 @@ def _handle_hashtag(identifier: str, count: int, skip: int = 0) -> dict:
     target_dir = _output_dir / folder_name
     print(f"  Hashtag : #{tag}  ->  {target_dir} (count={count}, skip={skip})")
     downloaded = 0
+    order_ts = time.time()
     for post in itertools.islice(hashtag.get_posts(), skip, skip + count):
         downloaded += 1
         print(f"  [{downloaded}/{count}] {post.shortcode}", end="  ")
@@ -254,6 +282,7 @@ def _handle_hashtag(identifier: str, count: int, skip: int = 0) -> dict:
         _save_post_metadata(post, txt_path)
         _maybe_create_snapshot(post, target_dir)
         _maybe_process_carousel(post, target_dir)
+        _stamp_download_order(target_dir, post, order_ts + downloaded)
         print()
     return {"downloaded": downloaded, "target": str(target_dir)}
 
