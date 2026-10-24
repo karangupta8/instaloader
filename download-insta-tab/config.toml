@@ -2,7 +2,7 @@
 # No secrets belong here: the Chrome extension sends your cookies itself.
 # Windows paths go in single quotes so backslashes stay literal.
 
-output = 'C:\Users\karan\Downloads\_saved'
+output = 'C:\Users\karan\Downloads'
 delete_originals = true        # keep only the final *_snapshot file per post
 
 # Rate-limit safety (see README "Staying under Instagram's radar")

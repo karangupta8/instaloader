@@ -124,15 +124,44 @@ function ensurePositioned(el) {
   if (getComputedStyle(el).position === "static") el.style.position = "relative";
 }
 
+const POST_LINK = 'a[href*="/p/"], a[href*="/reel/"]';
+const articleButtons = new WeakMap(); // <article> -> the button we put on it
+
+/** Instagram can wrap a whole grid (saved / profile / hashtag) in ONE <article>. A real feed post
+ *  only ever links to a single post, so an article linking to two different posts is a grid. */
+function isGridContainer(article) {
+  const codes = new Set();
+  for (const link of article.querySelectorAll(POST_LINK)) {
+    const code = shortcodeFrom(link.getAttribute("href"));
+    if (code) codes.add(code);
+    if (codes.size > 1) return true;
+  }
+  return false;
+}
+
+/** Is this link part of a single feed post (as opposed to a tile in a grid)? */
+function insidePostArticle(link) {
+  const article = link.closest("article");
+  return article !== null && !isGridContainer(article);
+}
+
 function attachToArticles() {
-  for (const article of document.querySelectorAll(`article:not([${MARK}])`)) {
-    const link = article.querySelector('a[href*="/p/"], a[href*="/reel/"]');
-    if (!link) continue; // post link not rendered yet; retry on next mutation
+  for (const article of document.querySelectorAll("article")) {
+    const grid = isGridContainer(article);
+    if (article.hasAttribute(MARK)) {
+      if (grid) { // it looked like one post while loading but is a grid: hand it over to the tiles
+        articleButtons.get(article)?.remove();
+        article.removeAttribute(MARK);
+      }
+      continue;
+    }
+    if (grid || !article.querySelector(POST_LINK)) continue; // grid, or post link not rendered yet
     article.setAttribute(MARK, "1");
     ensurePositioned(article);
-    article.appendChild(makeButton(() => shortcodeFrom(
-      article.querySelector('a[href*="/p/"], a[href*="/reel/"]')?.getAttribute("href")
-    ), "igdl-corner"));
+    const btn = makeButton(() => shortcodeFrom(article.querySelector(POST_LINK)?.getAttribute("href")),
+      "igdl-corner");
+    articleButtons.set(article, btn);
+    article.appendChild(btn);
   }
 }
 
@@ -141,8 +170,8 @@ function attachToTiles() {
     `a[href*="/p/"]:not([${MARK}]), a[href*="/reel/"]:not([${MARK}])`
   );
   for (const tile of tiles) {
-    // Only media tiles; skip timestamp/caption links and anything inside an article.
-    if (!tile.querySelector("img, video") || tile.closest("article")) continue;
+    // Only media tiles; skip timestamp/caption links and links inside a single feed post.
+    if (!tile.querySelector("img, video") || insidePostArticle(tile)) continue;
     tile.setAttribute(MARK, "1");
     ensurePositioned(tile);
     tile.appendChild(makeButton(() => shortcodeFrom(tile.getAttribute("href")), "igdl-corner"));
@@ -183,11 +212,22 @@ function pageContext() {
 }
 
 function visibleShortcodes() {
-  const codes = Array.from(document.querySelectorAll('a[href*="/p/"], a[href*="/reel/"]'))
-    .filter((a) => a.querySelector("img, video") && !a.closest("article"))
+  const codes = Array.from(document.querySelectorAll(POST_LINK))
+    .filter((a) => a.querySelector("img, video") && !insidePostArticle(a))
     .map((a) => shortcodeFrom(a.getAttribute("href")))
     .filter(Boolean);
   return [...new Set(codes)];
+}
+
+/** For the console when the pill finds nothing: what the page's post links actually look like. */
+function describeLinks() {
+  const links = Array.from(document.querySelectorAll(POST_LINK));
+  return {
+    postLinks: links.length,
+    withMedia: links.filter((a) => a.querySelector("img, video")).length,
+    insideSinglePostArticle: links.filter(insidePostArticle).length,
+    sampleHref: links[0]?.getAttribute("href") ?? null,
+  };
 }
 
 /** Ask how many posts to fetch with a small inline box; resolves to null if cancelled/invalid and
@@ -280,6 +320,7 @@ async function runSavedBulk(btn) {
   const visible = visibleShortcodes();
   console.info("[igdl] saved pill clicked:", visible.length, "post tile(s) visible");
   if (!visible.length) {
+    console.info("[igdl] no tiles matched; page links:", describeLinks());
     return flashThenReset(btn, "fail", "✕ No posts found on this page (scroll first?)");
   }
 
