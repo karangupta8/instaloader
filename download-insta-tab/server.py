@@ -102,6 +102,7 @@ def make_handler(downloader: Downloader, state: LoginState):
                 result = await loop.run_in_executor(None, lambda: downloader.download(msg, token, progress))
                 await send({"type": "done", **result})
             except RequestRefused as exc:
+                print(f"[ig-dl] Refused: {exc}", file=sys.stderr)
                 await send({"type": "error", "error": str(exc)})
             except Exception as exc:
                 traceback.print_exc()
@@ -136,6 +137,7 @@ def make_handler(downloader: Downloader, state: LoginState):
                             None, lambda: state.login(sessionid, csrftoken, user_agent, hints))
                         await send({"type": "auth_ok", "logged_in_as": user, "output": output})
                     except Exception as exc:
+                        print(f"[ig-dl] Login failed: {exc}", file=sys.stderr)
                         await send({"type": "error", "error": str(exc)})
 
                 elif msg_type == "check":  # which shortcodes are already on disk? (no login needed)
@@ -149,6 +151,7 @@ def make_handler(downloader: Downloader, state: LoginState):
 
                 elif msg_type == "download":
                     if not state.authenticated:
+                        print("[ig-dl] Refused: download before login", file=sys.stderr)
                         await send({"type": "error", "error": "Not authenticated. Log in to Instagram in "
                                     "Chrome and use the extension, or start with --sessionid/--csrftoken."})
                     elif active is not None and not active.done():

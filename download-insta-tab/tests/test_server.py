@@ -85,9 +85,9 @@ def test_login_is_cached_per_cookie_and_browser_identity(tmp_path):
 
 # ── WebSocket protocol, end to end over a real socket ────────────────────────
 
-def run_with_server(tmp_path, scenario, *, delay=0.0, authenticated=True):
+def run_with_server(tmp_path, scenario, *, delay=0.0, authenticated=True, **settings):
     """Start the real handler on a free port and run `scenario(ws, downloader)` against it."""
-    dl, loader = make_downloader(tmp_path)
+    dl, loader = make_downloader(tmp_path, **settings)
     loader.delay = delay
     state = server.LoginState(loader, dl)
     state.authenticated = authenticated
@@ -194,3 +194,17 @@ def test_closing_the_connection_cancels_the_batch(tmp_path, monkeypatch):
 
     asyncio.run(asyncio.wait_for(main(), timeout=30))
     assert len(loader.downloaded) < 5
+
+
+def test_refused_requests_are_logged_on_the_server_console(tmp_path, capsys):
+    async def scenario(ws, _dl):
+        await ws.send(json.dumps({"type": "download", "page_type": "collection",
+                                  "identifiers": ["A", "B", "C"], "count": 3}))
+        return await recv_until(ws, "error")
+
+    _, err = run_with_server(tmp_path, scenario, max_batch=2)
+
+    logged = capsys.readouterr()
+    assert "COLLECTION" in logged.out  # the request itself is visible...
+    assert "Refused" in logged.err and "max-batch" in logged.err  # ...and so is why it was refused
+    assert "max-batch" in err["error"]

@@ -195,7 +195,11 @@ const summarize = (done) => ({
 function respond(promise, sendResponse, onOk, refresh = true) {
   promise
     .then((value) => { sendResponse(onOk(value)); if (refresh) refreshStatus(); })
-    .catch((err) => { sendResponse({ ok: false, error: err.message }); if (refresh) refreshStatus(); });
+    .catch((err) => {
+      console.warn("[igdl] request failed:", err.message);
+      sendResponse({ ok: false, error: err.message });
+      if (refresh) refreshStatus();
+    });
   return true; // async response
 }
 

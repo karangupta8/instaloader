@@ -485,10 +485,10 @@ class Downloader:
             if cancel.is_set():
                 return {"downloaded": 0, "skipped": 0, "failed": 0, "target": str(self.settings.output_dir),
                         "aborted": "Cancelled by user.", "cancelled": True}
-            allowance = self.check_request(self._batch_size(page_type, msg, count, skip))
             print(f"\n[ig-dl] {page_type.upper()}"
                   + (f" -> {msg['identifier']}" if msg.get("identifier") else "")
                   + f"  (count={count}, skip={skip})")
+            allowance = self.check_request(self._batch_size(page_type, msg, count, skip))
             try:
                 plan = getattr(self, f"_plan_{page_type}")(msg, count, skip)
             except Exception as exc:

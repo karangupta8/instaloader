@@ -42,3 +42,22 @@
 .igdl-bulk[data-state="fail"] { background: #c62828; }
 
 [data-igdl-have] { outline: 3px solid #1a8f3c; outline-offset: -3px; }
+
+.igdl-panel {
+  position: fixed;
+  bottom: 76px;
+  right: 24px;
+  width: 260px;
+  padding: 12px;
+  border-radius: 12px;
+  background: #fff;
+  color: #111;
+  box-shadow: 0 4px 24px rgba(0, 0, 0, 0.35);
+  font: 14px/1.4 system-ui, sans-serif;
+  z-index: 2147483001;
+}
+.igdl-panel-text { white-space: pre-line; margin-bottom: 8px; }
+.igdl-panel-row { display: flex; gap: 6px; }
+.igdl-panel input { flex: 1; min-width: 0; padding: 6px 8px; border: 1px solid #bbb; border-radius: 6px; font: inherit; color: #111; background: #fff; }
+.igdl-panel button { padding: 6px 10px; border: 0; border-radius: 6px; background: #0095f6; color: #fff; font: 600 13px system-ui, sans-serif; cursor: pointer; }
+.igdl-panel button:last-child { background: #e4e6eb; color: #111; }

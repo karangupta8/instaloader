@@ -109,7 +109,10 @@ function makeButton(getShortcode, extraClass = "") {
 
     setState(btn, "busy", `Downloading ${shortcode}…`);
     const res = await send({ type: "download", shortcode, fromSavedPage: onSavedPage() });
-    if (!res?.ok) return setState(btn, "fail", res?.error || "Download failed");
+    if (!res?.ok) {
+      console.warn("[igdl] failed:", res?.error);
+      return setState(btn, "fail", res?.error || "Download failed");
+    }
     recordHave([shortcode]);
     setState(btn, "done", res.skipped ? "Already downloaded" : `Saved to ${res.target}`);
     btn.parentElement?.setAttribute(HAVE_ATTR, "1");
@@ -187,13 +190,55 @@ function visibleShortcodes() {
   return [...new Set(codes)];
 }
 
-/** Ask how many posts to fetch; null = cancelled/invalid. `blank` is what an empty answer means. */
+/** Ask how many posts to fetch with a small inline box; resolves to null if cancelled/invalid and
+ *  to `suggestion` if left blank. (Not window.prompt: Chrome can silently suppress page dialogs,
+ *  which made the pill look dead.) */
 function askCount(message, suggestion) {
-  const answer = window.prompt(message, String(suggestion));
-  if (answer === null) return null;
-  if (answer.trim() === "") return suggestion;
-  const n = parseInt(answer, 10);
-  return Number.isInteger(n) && n > 0 ? n : null;
+  const existing = document.querySelector(".igdl-panel");
+  if (existing) {
+    existing.querySelector("input")?.focus();
+    return Promise.resolve(null);
+  }
+  return new Promise((resolve) => {
+    const panel = document.createElement("div");
+    panel.className = "igdl-panel";
+    const text = document.createElement("div");
+    text.className = "igdl-panel-text";
+    text.textContent = message;
+    const input = document.createElement("input");
+    input.type = "number";
+    input.min = "1";
+    input.value = String(suggestion);
+    const go = document.createElement("button");
+    go.type = "button";
+    go.textContent = "Download";
+    const cancel = document.createElement("button");
+    cancel.type = "button";
+    cancel.textContent = "Cancel";
+    const row = document.createElement("div");
+    row.className = "igdl-panel-row";
+    row.append(input, go, cancel);
+
+    const close = (value) => { panel.remove(); resolve(value); };
+    go.addEventListener("click", () => {
+      const raw = input.value.trim();
+      const n = parseInt(raw, 10);
+      close(raw === "" ? suggestion : Number.isInteger(n) && n > 0 ? n : null);
+    });
+    cancel.addEventListener("click", () => close(null));
+    // Keep Instagram's global keyboard shortcuts away from our input.
+    input.addEventListener("keydown", (event) => {
+      event.stopPropagation();
+      if (event.key === "Enter") go.click();
+      if (event.key === "Escape") cancel.click();
+    });
+    input.addEventListener("keyup", (event) => event.stopPropagation());
+
+    panel.append(text, row);
+    document.body.appendChild(panel);
+    input.focus();
+    input.select();
+  });
 }
 
 function setBulk(btn, state, text, title = "") {
@@ -202,8 +247,15 @@ function setBulk(btn, state, text, title = "") {
   btn.title = title;
 }
 
+/** Show a failure on the pill itself (not just its tooltip) and in the page console. */
+function showFailure(btn, error) {
+  const message = error || "Download failed";
+  console.warn("[igdl] failed:", message);
+  setBulk(btn, "fail", `✕ ${message.length > 70 ? `${message.slice(0, 67)}…` : message}`, message);
+}
+
 function showResult(btn, res) {
-  if (!res?.ok) return setBulk(btn, "fail", "✕ Failed (hover)", res?.error || "Download failed");
+  if (!res?.ok) return showFailure(btn, res?.error);
   const parts = [`${res.downloaded} saved`];
   if (res.skipped) parts.push(`${res.skipped} already had`);
   if (res.failed) parts.push(`${res.failed} failed`);
@@ -216,23 +268,36 @@ async function refreshBadges(codes) {
   if (res?.ok) recordHave(res.downloaded);
 }
 
+/** Put the pill back to its idle label after a short message. */
+function flashThenReset(btn, state, text, title = "") {
+  setBulk(btn, state, text, title);
+  setTimeout(() => {
+    if (btn.isConnected && btn.textContent === text) resetBulk(pageContext() ?? { kind: "", label: text });
+  }, 4000);
+}
+
 async function runSavedBulk(btn) {
   const visible = visibleShortcodes();
-  if (!visible.length) return setBulk(btn, "idle", pageContext().label, "No posts found on this page");
+  console.info("[igdl] saved pill clicked:", visible.length, "post tile(s) visible");
+  if (!visible.length) {
+    return flashThenReset(btn, "fail", "✕ No posts found on this page (scroll first?)");
+  }
 
   setBulk(btn, "busy", "… checking");
   const checked = await send({ type: "check", shortcodes: visible });
-  if (!checked?.ok) return setBulk(btn, "fail", "✕ Failed (hover)", checked?.error || "Check failed");
+  if (!checked?.ok) return showFailure(btn, checked?.error || "Check failed");
   recordHave(checked.downloaded);
 
   const have = new Set(checked.downloaded);
   const fresh = visible.filter((code) => !have.has(code));
+  console.info("[igdl] check:", fresh.length, "new,", have.size, "already downloaded");
   if (!fresh.length) return setBulk(btn, "done", `✓ All ${visible.length} already downloaded`);
 
-  const count = askCount(
+  setBulk(btn, "asking", "… choose a number");
+  const count = await askCount(
     `${fresh.length} new post(s) to download (${have.size} already downloaded).\nHow many? (blank = all)`,
     fresh.length);
-  if (count === null) return setBulk(btn, "idle", pageContext().label);
+  if (count === null) return flashThenReset(btn, "idle", "Cancelled");
 
   const batch = fresh.slice(0, count);
   setBulk(btn, "busy", `… 0/${batch.length} · click to cancel`);
@@ -241,10 +306,12 @@ async function runSavedBulk(btn) {
 }
 
 async function runPageBulk(btn, ctx) {
-  const count = askCount(
+  console.info("[igdl] page pill clicked:", ctx.kind, ctx.identifier);
+  setBulk(btn, "asking", "… choose a number");
+  const count = await askCount(
     `Download the newest how many posts from ${ctx.display}?\n(Posts you already have are skipped.)`,
     DEFAULT_PAGE_COUNT);
-  if (count === null) return;
+  if (count === null) return flashThenReset(btn, "idle", "Cancelled");
 
   setBulk(btn, "busy", `… 0/${count} · click to cancel`);
   showResult(btn, await send({
@@ -258,6 +325,7 @@ function makeBulkButton() {
   btn.type = "button";
   btn.className = "igdl-bulk";
   btn.addEventListener("click", () => {
+    if (btn.dataset.state === "asking") return; // the count box is open; answer or cancel it
     if (btn.dataset.state === "busy") {
       btn.textContent = "… cancelling";
       send({ type: "cancel-batch" });

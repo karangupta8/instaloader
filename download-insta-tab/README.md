@@ -132,6 +132,17 @@ python download-insta-tab/scrape_comments.py AbCdEfG --sessionid "..." --csrftok
 | `tests/` | `python -m pytest download-insta-tab/tests` |
 | `legacy/` | Pre-extension scripts |
 
+## Where the logs are
+
+| Where | What it shows |
+|---|---|
+| **Server console** | Every request (`[ig-dl] COLLECTION …`), each post (`[3/40] AbC…`), `Refused: …` reasons (batch too big, cooldown, daily cap), login failures, and errors with tracebacks |
+| `<output>/downloads.jsonl` | One line per post: `downloaded` / `skipped` / `failed` / `aborted`, with time and error |
+| `<output>/.ig-dl-state.json` | Cooldown end time, if Instagram pushed back |
+| **The pill / button** | The error text itself; hover for the full message |
+| **Instagram tab DevTools → Console** | `[igdl] failed: …` lines from the page script |
+| **`chrome://extensions` → Instaloader Downloader → *service worker*** | The background worker's console (`[igdl] request failed: …`) and its Network/WS frames |
+
 ## Troubleshooting
 
 - **Icon shows `OFF`:** the server isn't running (or isn't on port 7432).
