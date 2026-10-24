@@ -40,3 +40,5 @@
 .igdl-bulk[data-state="busy"] { cursor: progress; }
 .igdl-bulk[data-state="done"] { background: #1a8f3c; }
 .igdl-bulk[data-state="fail"] { background: #c62828; }
+
+[data-igdl-have] { outline: 3px solid #1a8f3c; outline-offset: -3px; }

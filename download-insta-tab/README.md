@@ -92,6 +92,10 @@ and overlays a download button on every post, reel and saved-grid tile.
 3. Open Instagram and click the round button at the top-left of any post/reel/tile
    (⬇ idle, … working, ✓ saved, ✕ failed — hover for details).
 
+- **Already downloaded:** tiles whose files are already on disk get a green ✓ and outline, and are skipped on re-download. With snapshots enabled a post only counts once its `_snapshot` file exists, so interrupted downloads are retried.
+- **Download all visible** (saved pages): checks what's new, then asks how many to download (blank = all).
+- **Toolbar icon:** badge shows `ON` (server up, logged in), `OFF` (server not running) or `!` (not logged in); click it for details.
+
 Fresh cookies are sent on every click, so a refreshed or re-logged-in session just works.
 The server only accepts WebSocket connections from `chrome-extension://` and `https://www.instagram.com` origins.
 
@@ -130,6 +134,8 @@ For each downloaded post you get:
 | `--no-post-process` | off | Skip all post-processing (collage + caption graphic) |
 | `--no-collage` | off | Skip carousel collage/concat only |
 | `--no-graphic` | off | Skip caption graphic snapshot only |
+| `--post-delay MIN MAX` | `3 8` | Random pause (seconds) between posts in a multi-post run, on top of instaloader's own per-request sleeps. `0 0` disables |
+| `--max-batch` | `100` | Refuse requests for more posts than this at once |
 | `--delete-originals` | off | Delete original media/composite + `.txt` once a snapshot is created, keeping only the final `_snapshot` file per post |
 
 **Filename pattern tokens:** `{date}`, `{owner_username}`, `{shortcode}`, `{mediaid}`, etc.
@@ -287,6 +293,7 @@ pip install instaloader websockets Pillow playwright
 
 ## Notes
 
+- **Rate-limit safety:** instaloader sleeps a random 0–15 s before every Instagram request, tracks per-endpoint request counts in sliding windows, and backs off on HTTP 429. On top of that the server pauses `--post-delay` seconds between posts, caps a request at `--max-batch` posts, and — if Instagram answers with repeated 429s, a checkpoint/`feedback_required`, or a login redirect — stops the batch immediately and refuses new downloads for 15 minutes. Already-downloaded posts are never re-fetched. Don't run other Instagram clients, or several servers, with the same account at the same time.
 - The server only listens on `127.0.0.1` — your cookies never leave your machine.
 - Session cookies typically last weeks to months; restart the server with fresh cookies if authentication fails.
 - `--no-post-process` overrides `--no-collage` and `--no-graphic` — when set, nothing extra runs.

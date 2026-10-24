@@ -21,6 +21,7 @@ import json
 import logging
 import os
 import platform
+import random
 import re
 import sys
 import threading
@@ -51,6 +52,18 @@ _skip_collage: bool = False
 _skip_graphic: bool = False
 _delete_originals: bool = False
 _credentials: tuple[str, str] | None = None
+
+# ── Rate-limit safety (on top of instaloader's own per-request sleeps and 429 backoff) ──
+_post_delay: tuple[float, float] = (3.0, 8.0)   # random pause between posts in a multi-post run
+_max_batch: int = 100                           # most posts accepted in one request
+_COOLDOWN_SECONDS = 15 * 60                     # refuse new downloads this long after Instagram pushes back
+_cooldown_until: float = 0.0
+# Instagram telling us to stop: repeated 429s, checkpoint/feedback_required, redirected to login.
+_STOP_ERRORS = (
+    instaloader.TooManyRequestsException,
+    instaloader.AbortDownloadException,
+    instaloader.LoginRequiredException,
+)
 # instaloader's RateController and session are not thread-safe; serialize auth + downloads.
 _work_lock = threading.Lock()
 
@@ -142,6 +155,46 @@ def _save_post_metadata(post, txt_path: Path) -> None:
 _MEDIA_EXTS = [".jpg", ".jpeg", ".webp", ".mp4", ".mov"]
 
 
+def _pause_between_posts() -> None:
+    """Sleep a random human-ish interval so multi-post runs don't fire at machine cadence."""
+    low, high = _post_delay
+    if high > 0:
+        time.sleep(random.uniform(low, high))
+
+
+def _start_cooldown(reason: str) -> None:
+    global _cooldown_until
+    _cooldown_until = time.time() + _COOLDOWN_SECONDS
+    print(f"[ig-dl] Instagram pushed back ({reason}). Pausing all downloads for "
+          f"{_COOLDOWN_SECONDS // 60} minutes; avoid using Instagram heavily meanwhile.", file=sys.stderr)
+
+
+def _downloaded_shortcodes(shortcodes: list[str]) -> list[str]:
+    """Return the subset of shortcodes that already have output on disk.
+
+    Looks one folder level under the output dir (<user>/, _saved/, #tag/). When snapshots are
+    enabled a post only counts once its snapshot exists, so an interrupted download is retried;
+    otherwise any media file for the shortcode counts.
+    """
+    need_snapshot = not (_skip_post_process or _skip_graphic)
+    names: list[str] = []
+    try:
+        for sub in _output_dir.iterdir():
+            if sub.is_dir():
+                names.extend(p.name for p in sub.iterdir() if p.is_file())
+    except OSError as exc:
+        print(f"  [check] Could not scan {_output_dir}: {exc}", file=sys.stderr)
+        return []
+
+    def has_output(code: str) -> bool:
+        if need_snapshot:
+            snaps = (f"_{code}_snapshot.", f"_{code}_carousel_snapshot.")
+            return any(s in n for n in names for s in snaps)
+        return any(f"_{code}" in n and Path(n).suffix.lower() in _MEDIA_EXTS for n in names)
+
+    return [code for code in shortcodes if has_output(code)]
+
+
 def _maybe_create_snapshot(post, target_dir: Path) -> None:
     """Non-fatal: find the downloaded file and append a caption graphic."""
     if _skip_post_process or _skip_graphic:
@@ -221,6 +274,8 @@ def _handle_profile(identifier: str, count: int, skip: int = 0) -> dict:
     downloaded = 0
     order_ts = time.time()
     for post in itertools.islice(profile.get_posts(), skip, skip + count):
+        if downloaded:
+            _pause_between_posts()
         downloaded += 1
         print(f"  [{downloaded}/{actual}] {post.shortcode}", end="  ")
         _loader.download_post(post, target=profile.username)
@@ -241,6 +296,8 @@ def _handle_saved(count: int, skip: int = 0) -> dict:
     downloaded = 0
     order_ts = time.time()
     for post in itertools.islice(profile.get_saved_posts(), skip, skip + count):
+        if downloaded:
+            _pause_between_posts()
         downloaded += 1
         print(f"  [{downloaded}] {post.shortcode}", end="  ")
         _loader.download_post(post, target=folder_name)
@@ -256,14 +313,21 @@ def _handle_saved(count: int, skip: int = 0) -> dict:
     return {"downloaded": downloaded, "target": str(target_dir)}
 
 
-def _handle_collection(identifiers: list, count: int, skip: int = 0) -> dict:
+def _handle_collection(identifiers: list, count: int, skip: int = 0, force: bool = False) -> dict:
     folder_name = _get_saved_dir_name()
     target_dir = _output_dir / folder_name
     to_download = identifiers[skip : skip + count]
-    print(f"  Collection: downloading {len(to_download)} shortcodes to {target_dir} (skipped {skip})")
+    already = set() if force else set(_downloaded_shortcodes(to_download))
+    skipped = len(already)
+    to_download = [code for code in to_download if code not in already]
+    print(f"  Collection: downloading {len(to_download)} shortcodes to {target_dir} "
+          f"(skipped {skip}, {skipped} already downloaded)")
     downloaded = 0
+    aborted = None
     order_ts = time.time()
-    for shortcode in to_download:
+    for index, shortcode in enumerate(to_download):
+        if index:
+            _pause_between_posts()
         try:
             post = instaloader.Post.from_shortcode(_loader.context, shortcode)
             print(f"  [{downloaded+1}] {post.shortcode}", end="  ")
@@ -275,9 +339,18 @@ def _handle_collection(identifiers: list, count: int, skip: int = 0) -> dict:
             downloaded += 1
             _stamp_download_order(target_dir, post, order_ts + downloaded)
             print()
+        except _STOP_ERRORS as e:
+            # Don't keep hammering Instagram once it says stop.
+            aborted = f"{type(e).__name__}: {e}"
+            print(f"\nStopping batch at {shortcode}: {aborted}", file=sys.stderr)
+            _start_cooldown(type(e).__name__)
+            break
         except Exception as e:
             print(f"\nError downloading {shortcode}: {e}")
-    return {"downloaded": downloaded, "target": str(target_dir)}
+    result = {"downloaded": downloaded, "skipped": skipped, "target": str(target_dir)}
+    if aborted:
+        result["aborted"] = aborted
+    return result
 
 
 def _handle_hashtag(identifier: str, count: int, skip: int = 0) -> dict:
@@ -289,6 +362,8 @@ def _handle_hashtag(identifier: str, count: int, skip: int = 0) -> dict:
     downloaded = 0
     order_ts = time.time()
     for post in itertools.islice(hashtag.get_posts(), skip, skip + count):
+        if downloaded:
+            _pause_between_posts()
         downloaded += 1
         print(f"  [{downloaded}/{count}] {post.shortcode}", end="  ")
         _loader.download_post(post, target=folder_name)
@@ -301,7 +376,10 @@ def _handle_hashtag(identifier: str, count: int, skip: int = 0) -> dict:
     return {"downloaded": downloaded, "target": str(target_dir)}
 
 
-def _handle_post(identifier: str) -> dict:
+def _handle_post(identifier: str, force: bool = False) -> dict:
+    if not force and _downloaded_shortcodes([identifier]):
+        print(f"  Post    : {identifier} already downloaded, skipping")
+        return {"downloaded": 0, "skipped": 1, "target": str(_output_dir)}
     post = instaloader.Post.from_shortcode(_loader.context, identifier)
     folder_name = post.owner_username
     target_dir = _output_dir / folder_name
@@ -311,15 +389,16 @@ def _handle_post(identifier: str) -> dict:
     _save_post_metadata(post, txt_path)
     _maybe_create_snapshot(post, target_dir)
     _maybe_process_carousel(post, target_dir)
-    return {"downloaded": 1, "target": str(target_dir)}
+    _stamp_download_order(target_dir, post, time.time())
+    return {"downloaded": 1, "skipped": 0, "target": str(target_dir)}
 
 
 ROUTES = {
     "profile":  lambda d, c, s: _handle_profile(d["identifier"], c, s),
     "saved":    lambda d, c, s: _handle_saved(c, s),
     "hashtag":  lambda d, c, s: _handle_hashtag(d["identifier"], c, s),
-    "post":     lambda d, c, s: _handle_post(d["identifier"]),
-    "collection": lambda d, c, s: _handle_collection(d["identifiers"], c, s),
+    "post":     lambda d, c, s: _handle_post(d["identifier"], bool(d.get("force"))),
+    "collection": lambda d, c, s: _handle_collection(d["identifiers"], c, s, bool(d.get("force"))),
 }
 
 
@@ -361,9 +440,19 @@ async def handle_client(websocket):
 
             try:
                 user = await asyncio.get_event_loop().run_in_executor(None, do_auth)
-                await send({"type": "auth_ok", "logged_in_as": user})
+                await send({"type": "auth_ok", "logged_in_as": user, "output": str(_output_dir)})
             except Exception as exc:
                 await send({"type": "error", "error": str(exc)})
+
+        # ── Which of these shortcodes are already on disk? (no auth needed) ────
+        elif msg_type == "check":
+            codes = msg.get("shortcodes")
+            if not (isinstance(codes, list) and len(codes) <= 2000
+                    and all(isinstance(c, str) and re.fullmatch(r"[A-Za-z0-9_-]+", c) for c in codes)):
+                await send({"type": "error", "error": "check needs a list of shortcodes"})
+                continue
+            found = await asyncio.get_event_loop().run_in_executor(None, _downloaded_shortcodes, codes)
+            await send({"type": "checked", "downloaded": found})
 
         # ── Download ──────────────────────────────────────────────────────────
         elif msg_type == "download":
@@ -380,6 +469,19 @@ async def handle_client(websocket):
                 await send({"type": "error", "error": f"Unknown page type: {page_type!r}"})
                 continue
 
+            wait_left = _cooldown_until - time.time()
+            if wait_left > 0:
+                await send({"type": "error", "error": f"Cooling down after an Instagram rate-limit/"
+                                                      f"challenge response; try again in {int(wait_left // 60) + 1} min."})
+                continue
+
+            batch = len(msg["identifiers"][skip:skip + count]) if page_type == "collection" \
+                and isinstance(msg.get("identifiers"), list) else count
+            if batch > _max_batch:
+                await send({"type": "error", "error": f"Batch of {batch} exceeds --max-batch {_max_batch}; "
+                                                      f"download fewer posts at a time."})
+                continue
+
             print(f"\n[ig-dl] {page_type.upper()}"
                   + (f" -> {msg.get('identifier')}" if msg.get("identifier") else "")
                   + f"  (count={count}, skip={skip})")
@@ -393,6 +495,8 @@ async def handle_client(websocket):
                 await send({"type": "done", **result})
             except Exception as exc:
                 traceback.print_exc()
+                if isinstance(exc, _STOP_ERRORS):
+                    _start_cooldown(type(exc).__name__)
                 await send({"type": "error", "error": str(exc)})
 
         else:
@@ -434,9 +538,22 @@ def main():
     parser.add_argument("--delete-originals", action="store_true",
                         help="Delete original media/composite and .txt once a snapshot is "
                              "created, keeping only the final _snapshot file per post")
+    parser.add_argument("--post-delay", nargs=2, type=float, metavar=("MIN", "MAX"), default=(3.0, 8.0),
+                        help="Random pause in seconds between posts in a multi-post run "
+                             "(default: 3 8; use 0 0 to disable). Added on top of instaloader's own "
+                             "per-request sleeps.")
+    parser.add_argument("--max-batch", type=int, default=100,
+                        help="Refuse requests for more than this many posts at once (default: 100)")
     args = parser.parse_args()
 
     global _skip_post_process, _skip_collage, _skip_graphic, _delete_originals
+    global _post_delay, _max_batch
+    if args.post_delay[0] < 0 or args.post_delay[1] < args.post_delay[0]:
+        parser.error("--post-delay needs 0 <= MIN <= MAX")
+    if args.max_batch < 1:
+        parser.error("--max-batch must be at least 1")
+    _post_delay = (args.post_delay[0], args.post_delay[1])
+    _max_batch = args.max_batch
     _skip_post_process = args.no_post_process
     _skip_collage      = args.no_collage
     _skip_graphic      = args.no_graphic

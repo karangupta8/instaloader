@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Instaloader Downloader</title>
+  <style>
+    body { margin: 0; padding: 14px; width: 300px; font: 13px/1.4 system-ui, sans-serif; }
+    h1 { margin: 0 0 8px; font-size: 14px; }
+    #state { font-weight: 600; }
+    #state.ok { color: #1a8f3c; }
+    #state.down { color: #c62828; }
+    #state.auth { color: #ef6c00; }
+    #detail { margin-top: 6px; word-break: break-word; }
+    code { background: rgba(127, 127, 127, 0.2); padding: 1px 4px; border-radius: 3px; }
+  </style>
+</head>
+<body>
+  <h1>Instaloader Downloader</h1>
+  <div id="state">Checking…</div>
+  <div id="detail"></div>
+  <script src="popup.js"></script>
+</body>
+</html>
