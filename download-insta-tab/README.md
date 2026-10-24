@@ -129,7 +129,8 @@ python download-insta-tab/scrape_comments.py AbCdEfG --sessionid "..." --csrftok
 | `carousel_processor.py`, `caption_graphic.py` | The collage builder and the caption panel renderer |
 | `scrape_comments.py` | Full comment thread dump |
 | `config.example.toml` | Template for `config.toml` |
-| `tests/` | `python -m pytest download-insta-tab/tests` |
+| `tests/` | Server/pipeline tests: `python -m pytest download-insta-tab/tests` |
+| `extension/tests/` | Extension page-script tests in a simulated page: `cd download-insta-tab && npm install && npm test` |
 | `legacy/` | Pre-extension scripts |
 
 ## Where the logs are

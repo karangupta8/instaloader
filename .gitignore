@@ -4,3 +4,4 @@ __pycache__/
 keys.txt
 .coverage
 .pytest_cache/
+node_modules/

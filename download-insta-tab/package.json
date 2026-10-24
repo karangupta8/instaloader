@@ -1,0 +1,11 @@
+{
+  "name": "download-insta-tab-extension-tests",
+  "private": true,
+  "description": "Simulated-page tests for the Chrome extension's content script (kept outside extension/ so node_modules never ends up in the unpacked extension).",
+  "scripts": {
+    "test": "node extension/tests/pill.test.js"
+  },
+  "devDependencies": {
+    "jsdom": "24.1.0"
+  }
+}
