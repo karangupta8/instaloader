@@ -81,6 +81,22 @@ await igdl({ count: 5, skip: 2, port: 7432 })   // explicit options
 
 ---
 
+## Chrome extension (no cookie copying)
+
+The `extension/` folder is a Manifest V3 extension that removes the DevTools legwork:
+it reads your `sessionid`/`csrftoken` from Chrome's cookie jar, hands them to the server,
+and overlays a download button on every post, reel and saved-grid tile.
+
+1. `chrome://extensions` → enable **Developer mode** → **Load unpacked** → pick `download-insta-tab/extension`.
+2. Start the server with no cookies: `python download-insta-tab/server.py --output C:\Users\karan\Downloads`
+3. Open Instagram and click the round button at the top-left of any post/reel/tile
+   (⬇ idle, … working, ✓ saved, ✕ failed — hover for details).
+
+Fresh cookies are sent on every click, so a refreshed or re-logged-in session just works.
+The server only accepts WebSocket connections from `chrome-extension://` and `https://www.instagram.com` origins.
+
+---
+
 ## Output structure
 
 For each downloaded post you get:

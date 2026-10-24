@@ -1,0 +1,42 @@
+.igdl-btn {
+  all: unset;
+  box-sizing: border-box;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  background: rgba(0, 0, 0, 0.65);
+  color: #fff;
+  font: 600 16px/1 system-ui, sans-serif;
+  cursor: pointer;
+  z-index: 2147483000;
+  opacity: 0.85;
+}
+
+.igdl-btn:hover { opacity: 1; background: rgba(0, 0, 0, 0.85); }
+.igdl-btn[data-state="busy"] { cursor: progress; }
+.igdl-btn[data-state="done"] { background: #1a8f3c; }
+.igdl-btn[data-state="fail"] { background: #c62828; }
+
+.igdl-corner { position: absolute; top: 8px; left: 8px; }
+.igdl-floating { position: fixed; bottom: 24px; right: 24px; width: 44px; height: 44px; font-size: 20px; }
+
+.igdl-bulk {
+  all: unset;
+  box-sizing: border-box;
+  position: fixed;
+  bottom: 24px;
+  right: 24px;
+  padding: 10px 16px;
+  border-radius: 22px;
+  background: rgba(0, 0, 0, 0.8);
+  color: #fff;
+  font: 600 14px/1 system-ui, sans-serif;
+  cursor: pointer;
+  z-index: 2147483000;
+}
+.igdl-bulk[data-state="busy"] { cursor: progress; }
+.igdl-bulk[data-state="done"] { background: #1a8f3c; }
+.igdl-bulk[data-state="fail"] { background: #c62828; }

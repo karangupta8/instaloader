@@ -23,6 +23,7 @@ import os
 import platform
 import re
 import sys
+import threading
 import time
 import traceback
 import urllib.parse
@@ -49,6 +50,17 @@ _skip_post_process: bool = False
 _skip_collage: bool = False
 _skip_graphic: bool = False
 _delete_originals: bool = False
+_credentials: tuple[str, str] | None = None
+# instaloader's RateController and session are not thread-safe; serialize auth + downloads.
+_work_lock = threading.Lock()
+
+_ALLOWED_ORIGIN_PREFIXES = ("chrome-extension://", "https://www.instagram.com")
+
+
+def _origin_allowed(origin: str | None) -> bool:
+    """Browsers always send Origin on WebSocket handshakes. Reject arbitrary web pages so a
+    random site can't drive downloads (or push credentials) through this localhost server."""
+    return origin is None or origin.startswith(_ALLOWED_ORIGIN_PREFIXES)
 
 
 def _get_saved_dir_name() -> str:
@@ -68,13 +80,14 @@ def _user_id_from_sessionid(sessionid: str) -> int | None:
 
 def _authenticate(sessionid: str, csrftoken: str) -> str:
     """Build an instaloader session from cookie values."""
-    global _authenticated
+    global _authenticated, _credentials
 
     cookies = {
         "sessionid": sessionid,
         "csrftoken": csrftoken,
     }
 
+    _authenticated = False
     _loader.context.load_session("unknown", cookies)
 
     test_user = _loader.test_login()
@@ -91,6 +104,7 @@ def _authenticate(sessionid: str, csrftoken: str) -> str:
         raise ValueError("Could not parse a user id out of --sessionid; make sure you copied the full cookie value.")
     _loader.context.user_id = user_id
     _authenticated = True
+    _credentials = (sessionid, csrftoken)
     print(f"[ig-dl] Authenticated as @{test_user}")
     return test_user
 
@@ -332,10 +346,30 @@ async def handle_client(websocket):
 
         msg_type = msg.get("type")
 
+        # ── Auth (sent by the browser extension, straight from the cookie jar) ──
+        if msg_type == "auth":
+            sessionid, csrftoken = msg.get("sessionid"), msg.get("csrftoken")
+            if not (isinstance(sessionid, str) and sessionid and isinstance(csrftoken, str) and csrftoken):
+                await send({"type": "error", "error": "auth needs sessionid and csrftoken"})
+                continue
+
+            def do_auth():
+                with _work_lock:
+                    if _authenticated and _credentials == (sessionid, csrftoken):
+                        return _loader.context.username
+                    return _authenticate(sessionid, csrftoken)
+
+            try:
+                user = await asyncio.get_event_loop().run_in_executor(None, do_auth)
+                await send({"type": "auth_ok", "logged_in_as": user})
+            except Exception as exc:
+                await send({"type": "error", "error": str(exc)})
+
         # ── Download ──────────────────────────────────────────────────────────
-        if msg_type == "download":
+        elif msg_type == "download":
             if not _authenticated:
-                await send({"type": "error", "error": "Not authenticated. Call igdl() from an Instagram page."})
+                await send({"type": "error", "error": "Not authenticated. Log in to Instagram in Chrome "
+                                                      "and use the extension, or start with --sessionid/--csrftoken."})
                 continue
 
             page_type = msg.get("page_type")
@@ -351,9 +385,11 @@ async def handle_client(websocket):
                   + f"  (count={count}, skip={skip})")
 
             try:
-                result = await asyncio.get_event_loop().run_in_executor(
-                    None, lambda: ROUTES[page_type](msg, count, skip)
-                )
+                def run_route():
+                    with _work_lock:
+                        return ROUTES[page_type](msg, count, skip)
+
+                result = await asyncio.get_event_loop().run_in_executor(None, run_route)
                 await send({"type": "done", **result})
             except Exception as exc:
                 traceback.print_exc()
@@ -377,10 +413,11 @@ def main():
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
-    parser.add_argument("--sessionid", required=True,
-                        help="Instagram sessionid cookie value")
-    parser.add_argument("--csrftoken", required=True,
-                        help="Instagram csrftoken cookie value")
+    parser.add_argument("--sessionid",
+                        help="Instagram sessionid cookie value (optional when using the Chrome "
+                             "extension, which sends cookies itself)")
+    parser.add_argument("--csrftoken",
+                        help="Instagram csrftoken cookie value (optional with the extension)")
     parser.add_argument("--output", "-o", default=".",
                         help="Root directory for downloads (default: current dir)")
     parser.add_argument("--port", "-p", type=int, default=7432,
@@ -428,23 +465,32 @@ def main():
         post_metadata_txt_pattern="",  # we write our own JSON txt
     )
 
-    try:
-        _authenticate(args.sessionid, args.csrftoken)
-    except Exception as exc:
-        print(f"[ig-dl] ERROR: {exc}", file=sys.stderr)
-        sys.exit(1)
+    if bool(args.sessionid) != bool(args.csrftoken):
+        parser.error("--sessionid and --csrftoken must be given together")
+
+    if args.sessionid:
+        try:
+            _authenticate(args.sessionid, args.csrftoken)
+        except Exception as exc:
+            print(f"[ig-dl] ERROR: {exc}", file=sys.stderr)
+            sys.exit(1)
+    else:
+        print("[ig-dl] No cookies given; waiting for the Chrome extension to authenticate.")
 
     print(f"[ig-dl] Output : {_output_dir}")
     print(f"[ig-dl] Listening on ws://localhost:{args.port}")
-    print(f"[ig-dl] Paste console.js in any Instagram tab and call igdl()\n")
+    print(f"[ig-dl] Use the Chrome extension, or paste console.js in an Instagram tab and call igdl()\n")
 
     async def process_request(connection, request):
-        """Handle Chrome's Private Network Access preflight before WebSocket upgrade."""
+        """Handle Chrome's Private Network Access preflight, and reject foreign origins."""
+        origin = request.headers.get("Origin")
+        if not _origin_allowed(origin):
+            return connection.respond(http.HTTPStatus.FORBIDDEN, "Origin not allowed\n")
         if request.headers.get("Access-Control-Request-Private-Network") == "true":
             return connection.respond(
                 http.HTTPStatus.NO_CONTENT,
                 [
-                    ("Access-Control-Allow-Origin", request.headers.get("Origin", "*")),
+                    ("Access-Control-Allow-Origin", origin or "*"),
                     ("Access-Control-Allow-Private-Network", "true"),
                 ],
             )

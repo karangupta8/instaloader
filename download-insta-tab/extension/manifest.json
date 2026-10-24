@@ -1,0 +1,17 @@
+{
+  "manifest_version": 3,
+  "name": "Instaloader Downloader",
+  "version": "1.0.0",
+  "description": "Adds a download button to Instagram posts, reels and saved items; sends them to your local instaloader server.",
+  "permissions": ["cookies", "storage"],
+  "host_permissions": ["https://www.instagram.com/*"],
+  "background": { "service_worker": "background.js" },
+  "content_scripts": [
+    {
+      "matches": ["https://www.instagram.com/*"],
+      "js": ["content.js"],
+      "css": ["content.css"],
+      "run_at": "document_idle"
+    }
+  ]
+}
