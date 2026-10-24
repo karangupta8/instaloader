@@ -37,6 +37,20 @@ function getClientHeaders() {
   return headers;
 }
 
+// Cookies that identify this browser/device (see DEVICE_COOKIE_NAMES in session.py). Sent along so the
+// server's requests look like the same device as your tab, not a new one on every server start.
+const DEVICE_COOKIES = ["mid", "ig_did", "datr", "ds_user_id", "rur", "ig_nrcb", "wd", "dpr",
+  "ps_l", "ps_n", "shbid", "shbts", "ig_direct_region_hint"];
+
+async function getDeviceCookies() {
+  const all = await chrome.cookies.getAll({ domain: "instagram.com" });
+  const cookies = {};
+  for (const cookie of all) {
+    if (DEVICE_COOKIES.includes(cookie.name)) cookies[cookie.name] = cookie.value;
+  }
+  return cookies;
+}
+
 async function getAuthPayload() {
   const [sessionid, csrftoken] = await Promise.all([getCookie("sessionid"), getCookie("csrftoken")]);
   if (!sessionid || !csrftoken) {
@@ -48,6 +62,7 @@ async function getAuthPayload() {
     type: "auth", sessionid, csrftoken,
     user_agent: navigator.userAgent,
     client_headers: getClientHeaders(),
+    cookies: await getDeviceCookies(),
   };
 }
 

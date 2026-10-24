@@ -5,7 +5,10 @@
 output = 'C:\Users\karan\Downloads'
 delete_originals = true        # keep only the final *_snapshot file per post
 
-# Rate-limit safety (see README "Staying under Instagram's radar")
-post_delay = [3.0, 8.0]        # random pause between posts in a run, seconds
-max_batch = 100                # most posts accepted in one request
-daily_cap = 200                # most posts per rolling 24 hours (0 = off)
+# Rate-limit safety (see README "Staying under Instagram's radar").
+# Deliberately conservative after Instagram restricted the account on 2026-10-24
+# ("You can't create multiple sessions"). Raise slowly, if at all.
+post_delay = [8.0, 20.0]       # random pause between posts in a run, seconds
+max_batch = 25                 # most posts accepted in one request
+daily_cap = 60                 # most posts per rolling 24 hours (0 = off)
+cooldown_minutes = 240         # refuse all downloads this long after Instagram pushes back

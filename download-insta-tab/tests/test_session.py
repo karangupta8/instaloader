@@ -75,3 +75,18 @@ def test_authenticate_rejects_dead_cookies_and_malformed_sessionid():
         session.authenticate(make_loader(username=None), SESSIONID, "csrf")
     with pytest.raises(ValueError, match="user id"):
         session.authenticate(make_loader(), "garbage", "csrf")
+
+
+def test_clean_cookies_keeps_only_device_cookies():
+    cleaned = session.clean_cookies({"mid": "M1", "ig_did": "D1", "sessionid": "SECRET", "evil": "x",
+                                     "rur": 'a"b,c', "datr": "bad\nvalue", "wd": ""})
+    assert cleaned == {"mid": "M1", "ig_did": "D1", "rur": 'a"b,c'}
+    assert session.clean_cookies(None) == {}
+
+
+def test_authenticate_loads_device_cookies_into_the_session():
+    loader = make_loader()
+    session.authenticate(loader, SESSIONID, "csrf", UA, HINTS, {"mid": "M1", "ig_did": "D1"})
+    jar = loader.context._session.cookies.get_dict()
+    assert jar["mid"] == "M1" and jar["ig_did"] == "D1"
+    assert jar["sessionid"] == SESSIONID and jar["csrftoken"] == "csrf"

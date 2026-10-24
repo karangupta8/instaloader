@@ -208,3 +208,28 @@ def test_refused_requests_are_logged_on_the_server_console(tmp_path, capsys):
     assert "COLLECTION" in logged.out  # the request itself is visible...
     assert "Refused" in logged.err and "max-batch" in logged.err  # ...and so is why it was refused
     assert "max-batch" in err["error"]
+
+
+def test_login_relogs_when_the_device_identity_changes_but_not_for_rotating_cookies(tmp_path):
+    dl, _ = make_downloader(tmp_path)
+    loader = instaloader.Instaloader()
+    calls = []
+    loader.test_login = lambda: calls.append(1) or "someone"
+    state = server.LoginState(loader, dl)
+    sid, ua = "123456%3Aabc%3A1%3Adef", "Mozilla/5.0 (Windows NT 10.0)"
+
+    state.login(sid, "csrf", ua, {}, {"mid": "M1", "ig_did": "D1", "rur": "v1"})
+    state.login(sid, "csrf", ua, {}, {"mid": "M1", "ig_did": "D1", "rur": "v2"})  # rur rotates constantly
+    assert len(calls) == 1
+    state.login(sid, "csrf", ua, {}, {"mid": "M2", "ig_did": "D1"})  # a different device id
+    assert len(calls) == 2
+    assert loader.context._session.cookies.get_dict()["mid"] == "M2"
+
+
+def test_safer_defaults_and_cooldown_option(tmp_path):
+    empty = write_config(tmp_path, "")  # isolate from the repo's real config.toml
+    args = server.parse_args(["--config", str(empty)])
+    assert args.post_delay == (6.0, 15.0) and args.max_batch == 50 and args.daily_cap == 100
+    assert args.cooldown_minutes == 120
+    with pytest.raises(SystemExit):
+        server.parse_args(["--cooldown-minutes", "0"])

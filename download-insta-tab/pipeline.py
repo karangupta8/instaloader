@@ -59,13 +59,33 @@ class RequestRefused(Exception):
     """A request rejected up front: bad input, cooldown, batch cap or daily cap."""
 
 
+# HTTP status codes instaloader should abort on immediately instead of retrying: 401 is Instagram's
+# "Please wait a few minutes before you try again" soft block, 429 is rate limiting. Retrying either
+# only adds more requests to an account that is already being throttled.
+FATAL_STATUS_CODES = [401, 429]
+
+# Message fragments that mean the same thing when they arrive wrapped in a plain ConnectionException.
+STOP_MARKERS = (
+    "please wait a few minutes",
+    "too many requests",
+    "login_required",
+    "checkpoint_required",
+    "challenge_required",
+    "feedback_required",
+    "consent_required",
+)
+
+
 def is_stop_error(exc: BaseException | None) -> bool:
-    """True if Instagram is telling us to stop, including a 429 that instaloader re-raised as a
-    plain ConnectionException after exhausting its own retries (the original is its __cause__)."""
+    """True if Instagram is telling us to stop: a stop exception, or a ConnectionException whose
+    message carries a stop marker (401 "please wait", login_required, a challenge...), at any
+    level of the __cause__ chain (instaloader re-raises exhausted retries as a plain ConnectionException)."""
     for _ in range(5):
         if exc is None:
             return False
         if isinstance(exc, STOP_ERRORS):
+            return True
+        if isinstance(exc, instaloader.ConnectionException) and any(m in str(exc).lower() for m in STOP_MARKERS):
             return True
         exc = exc.__cause__
     return False
@@ -83,10 +103,11 @@ class Settings:
     skip_collage: bool = False
     skip_graphic: bool = False
     delete_originals: bool = False
-    post_delay: tuple[float, float] = (3.0, 8.0)  # random pause (s) between posts in a run
-    max_batch: int = 100                          # most posts accepted in one request
-    daily_cap: int = 300                          # most posts downloaded per rolling 24h (0 = off)
-    cooldown_seconds: int = 15 * 60               # refuse downloads this long after Instagram pushes back
+    post_delay: tuple[float, float] = (6.0, 15.0)  # random pause (s) between posts in a run
+    max_batch: int = 50                            # most posts accepted in one request
+    daily_cap: int = 100                           # most posts downloaded per rolling 24h (0 = off)
+    cooldown_seconds: int = 120 * 60               # refuse downloads this long after Instagram pushes back
+    max_consecutive_failures: int = 2              # stop (and cool down) after this many failed posts in a row
 
 
 @dataclass(frozen=True)
@@ -355,6 +376,7 @@ class Downloader:
         counts = {"downloaded": 0, "skipped": 0, "failed": 0}
         extra: dict[str, Any] = {}
         last_error = None
+        consecutive_failures = 0
         target = self.settings.output_dir / (folder or "")
         order_ts = time.time()
         handled = 0
@@ -409,8 +431,22 @@ class Downloader:
                     print(f"  Error downloading {ref.shortcode}: {exc}", file=sys.stderr)
                     self._log("failed", ref.shortcode, error=last_error)
                     status = "failed"
+                    # A deleted post is just a 404; anything else failing back to back usually means
+                    # Instagram is throttling us, and carrying on makes it worse.
+                    if not isinstance(exc, instaloader.QueryReturnedNotFoundException):
+                        consecutive_failures += 1
+                    if consecutive_failures >= self.settings.max_consecutive_failures:
+                        reason = f"{consecutive_failures} posts failed in a row (last: {last_error})"
+                        print(f"  Stopping batch: {reason}", file=sys.stderr)
+                        self._log("aborted", ref.shortcode, error=reason)
+                        self.start_cooldown("consecutive failures")
+                        abort(reason)
+                        handled += 1
+                        emit(ref.shortcode, status)
+                        break
                 else:
                     status = "downloaded"
+                    consecutive_failures = 0
                 handled += 1
                 emit(ref.shortcode, status)
         except Exception as exc:  # raised by the iterator itself (e.g. a pagination request)

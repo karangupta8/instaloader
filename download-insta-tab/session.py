@@ -12,6 +12,12 @@ import urllib.parse
 CLIENT_HINT_KEYS = ("sec-ch-ua", "sec-ch-ua-mobile", "sec-ch-ua-platform", "accept-language")
 SAME_ORIGIN_FETCH = {"sec-fetch-site": "same-origin", "sec-fetch-mode": "cors", "sec-fetch-dest": "empty"}
 
+# Besides sessionid/csrftoken, the browser holds cookies that identify this *device* (mid, ig_did,
+# datr...). Without them every server start looks like a brand-new device using your session,
+# which is the "multiple sessions" pattern Instagram restricts accounts for. Only these are forwarded.
+DEVICE_COOKIE_NAMES = ("mid", "ig_did", "datr", "ds_user_id", "rur", "ig_nrcb", "wd", "dpr",
+                       "ps_l", "ps_n", "shbid", "shbts", "ig_direct_region_hint")
+
 
 def user_id_from_sessionid(sessionid: str) -> int | None:
     """Instagram's sessionid cookie is "<user_id>:<token>:<version>:<hash>" (colons may be
@@ -38,6 +44,18 @@ def clean_client_headers(raw: object) -> dict[str, str]:
     return cleaned
 
 
+def clean_cookies(raw: object) -> dict[str, str]:
+    """Keep only the whitelisted device cookies, with sane printable values."""
+    if not isinstance(raw, dict):
+        return {}
+    cleaned = {}
+    for name in DEVICE_COOKIE_NAMES:
+        value = raw.get(name)
+        if isinstance(value, str) and value and len(value) <= 1000 and value.isprintable():
+            cleaned[name] = value
+    return cleaned
+
+
 def install_browser_headers(session, client_headers: dict[str, str]) -> None:
     """Add Chrome's client hints + fetch-metadata headers to www.instagram.com requests.
 
@@ -57,18 +75,21 @@ def install_browser_headers(session, client_headers: dict[str, str]) -> None:
 
 
 def authenticate(loader, sessionid: str, csrftoken: str, user_agent: str | None = None,
-                 client_headers: dict[str, str] | None = None) -> str:
+                 client_headers: dict[str, str] | None = None,
+                 device_cookies: dict[str, str] | None = None) -> str:
     """Load cookie values into `loader` and return the logged-in username.
 
     user_agent / client_headers, when given, are the real browser's, so requests match the browser
     that owns the session instead of instaloader's generic ones. The UA must be set *before*
-    load_session(), which bakes it into the session headers.
+    load_session(), which bakes it into the session headers. device_cookies are the browser's
+    device-identifying cookies (see DEVICE_COOKIE_NAMES).
 
     Raises ValueError if the cookies are invalid/expired or malformed.
     """
     if user_agent:
         loader.context.user_agent = user_agent
-    loader.context.load_session("unknown", {"sessionid": sessionid, "csrftoken": csrftoken})
+    loader.context.load_session("unknown", {**(device_cookies or {}), "sessionid": sessionid,
+                                            "csrftoken": csrftoken})
     # No public API for per-request headers; the context's session is what load_session() just built.
     install_browser_headers(loader.context._session, client_headers or {})  # pylint: disable=protected-access
 

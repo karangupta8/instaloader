@@ -60,9 +60,10 @@ Every option can be a command-line flag or a key in `config.toml` (flag wins). C
 | `--no-post-process` | off | Skip collages and caption graphics entirely |
 | `--no-collage` | off | Skip carousel collages only |
 | `--no-graphic` | off | Skip caption snapshots only |
-| `--post-delay MIN MAX` | `3 8` | Random pause (seconds) between posts in a run; `0 0` disables |
-| `--max-batch` | `100` | Refuse requests for more posts than this at once |
-| `--daily-cap` | `300` | Most posts per rolling 24 h; `0` disables |
+| `--post-delay MIN MAX` | `6 15` | Random pause (seconds) between posts in a run; `0 0` disables |
+| `--max-batch` | `50` | Refuse requests for more posts than this at once |
+| `--daily-cap` | `100` | Most posts per rolling 24 h; `0` disables |
+| `--cooldown-minutes` | `120` | After Instagram pushes back, refuse all downloads for this long |
 | `--extension-id` | any | Only accept this Chrome extension (ID shown on `chrome://extensions`) |
 | `--filename-pattern` | `{owner_username}_{shortcode}` | Custom patterns require `--no-post-process`: snapshots, collages and the already-downloaded check rely on the default |
 | `--sessionid`, `--csrftoken` | — | Optional. Only for use without the extension (see Legacy) |
@@ -70,17 +71,17 @@ Every option can be a command-line flag or a key in `config.toml` (flag wins). C
 
 ## Staying under Instagram's radar
 
-Nothing makes bulk downloading risk-free, but these layers are all on by default:
+Nothing makes bulk downloading risk-free: **Instagram restricted this account once** ("You can't create multiple sessions", 2026-10-24) after a ~12-post run during which it was already answering "Please wait a few minutes before you try again". The layers below are the result of that, and are all on by default.
 
-- **Instaloader's own limits:** a random 0–15 s sleep before every Instagram request, per-endpoint request counting in sliding windows, and automatic backoff on HTTP 429.
-- **Pacing between posts:** a random `--post-delay` pause on top (3–8 s).
-- **Caps:** `--max-batch` per request and `--daily-cap` per rolling 24 h (counted from `downloads.jsonl`).
-- **Stop, don't push:** on repeated 429s, a checkpoint / `feedback_required`, or a login redirect — including from the comments fetch — the batch stops immediately and **all downloads are refused for 15 minutes**. The cooldown is saved in the output folder, so restarting the server doesn't clear it.
-- **No repeat traffic:** posts already on disk are never re-fetched.
-- **Looks like your browser:** requests carry Chrome's real user-agent, client hints (`sec-ch-ua*`), `Accept-Language` and `sec-fetch-*` headers, only toward `www.instagram.com`. (The TLS fingerprint still differs from Chrome's.)
-- **Local-only plumbing:** the status icon, duplicate checks and badges talk only to your local server, never to Instagram.
+- **Abort on the first soft block.** Instaloader is told to abort immediately on HTTP **401** ("please wait a few minutes") and **429** instead of retrying. Messages like `login_required`, `checkpoint_required`, `challenge_required` and `feedback_required` are treated the same way, including when they come from the comments fetch. Two posts failing back to back also stops the run (a deleted post, a plain 404, doesn't count).
+- **Cooldown.** Any of the above stops the batch and **refuses all downloads for `--cooldown-minutes` (120)**. The cooldown is saved in the output folder (`.ig-dl-state.json`), so restarting the server doesn't clear it; delete that file only if you really mean to override it.
+- **Same device, not a new one every time.** The extension sends your browser's device cookies (`mid`, `ig_did`, `datr`, …) along with the session, plus Chrome's real user-agent, client hints, `Accept-Language` and `sec-fetch-*` headers (toward `www.instagram.com` only). Without those, each server start looked like a brand-new device using your session. **Keep the server running instead of restarting it repeatedly.**
+- **Pacing:** instaloader's own random 0–15 s sleep before every request, plus `--post-delay` (6–15 s) between posts.
+- **Caps:** `--max-batch` (50) per request and `--daily-cap` (100) per rolling 24 h, counted from `downloads.jsonl`.
+- **No repeat traffic:** posts already on disk are never re-fetched. Status icon, duplicate checks and badges talk only to your local server.
+- The TLS fingerprint of Python's requests still differs from Chrome's; that can't be fixed from here.
 
-Habits that matter more than any setting: download in modest batches (a few dozen), don't run other Instagram automation on the same account, and avoid heavy Instagram app use while a batch runs.
+Habits that matter more than any setting: small batches (a few dozen at most), a few days apart rather than several runs a day, no other Instagram automation on the account, and no heavy Instagram app use while a batch runs. After a restriction, wait it out, use Instagram normally for a day or two, and only then start again with small batches.
 
 ## Offline tools
 

@@ -29,7 +29,7 @@ from websockets.asyncio.server import serve as ws_serve
 from websockets.exceptions import ConnectionClosed
 
 import session
-from pipeline import DEFAULT_FILENAME_PATTERN, Downloader, RequestRefused, Settings
+from pipeline import DEFAULT_FILENAME_PATTERN, FATAL_STATUS_CODES, Downloader, RequestRefused, Settings
 
 import instaloader  # noqa: E402  (importable once pipeline has put the parent package on sys.path)
 
@@ -65,14 +65,19 @@ class LoginState:
         return self.loader.context.username if self.authenticated else None
 
     def login(self, sessionid: str, csrftoken: str, user_agent: str | None = None,
-              client_headers: dict[str, str] | None = None) -> str:
-        key = (sessionid, csrftoken, user_agent, tuple(sorted((client_headers or {}).items())))
+              client_headers: dict[str, str] | None = None,
+              device_cookies: dict[str, str] | None = None) -> str:
+        device = device_cookies or {}
+        # Only the stable device ids go in the key (rur/ps_l etc. change constantly, and every
+        # re-login is itself a request to Instagram).
+        key = (sessionid, csrftoken, user_agent, tuple(sorted((client_headers or {}).items())),
+               device.get("mid"), device.get("ig_did"))
         # Same cookies + browser identity => already logged in; skips an Instagram request.
         if self.authenticated and self._key == key:
             return self.loader.context.username
         with self.downloader.lock:
             self.authenticated = False
-            username = session.authenticate(self.loader, sessionid, csrftoken, user_agent, client_headers)
+            username = session.authenticate(self.loader, sessionid, csrftoken, user_agent, client_headers, device)
             self.authenticated, self._key = True, key
         print(f"[ig-dl] Authenticated as @{username}")
         return username
@@ -132,9 +137,10 @@ def make_handler(downloader: Downloader, state: LoginState):
                     if not session.valid_user_agent(user_agent):
                         user_agent = None  # keep instaloader's default rather than send something odd
                     hints = session.clean_client_headers(msg.get("client_headers"))
+                    device = session.clean_cookies(msg.get("cookies"))
                     try:
                         user = await loop.run_in_executor(
-                            None, lambda: state.login(sessionid, csrftoken, user_agent, hints))
+                            None, lambda: state.login(sessionid, csrftoken, user_agent, hints, device))
                         await send({"type": "auth_ok", "logged_in_as": user, "output": output})
                     except Exception as exc:
                         print(f"[ig-dl] Login failed: {exc}", file=sys.stderr)
@@ -174,6 +180,22 @@ def make_handler(downloader: Downloader, state: LoginState):
     return handle_client
 
 
+def build_loader(output_dir: Path, filename_pattern: str) -> "instaloader.Instaloader":
+    """The one instaloader instance, configured for this tool."""
+    # Embed the absolute output path in dirname_pattern so instaloader never sanitizes the base
+    # path (it only sanitizes the {target} substitution). On Windows, passing a full path as
+    # `target` replaces colons and backslashes with full-width lookalikes, breaking path resolution.
+    return instaloader.Instaloader(
+        dirname_pattern=str(output_dir / "{target}"),
+        filename_pattern=filename_pattern,
+        download_video_thumbnails=False,
+        save_metadata=False,
+        post_metadata_txt_pattern="",  # we write our own JSON txt
+        # Abort on 401 ("please wait a few minutes") and 429 instead of retrying into a throttled account.
+        fatal_status_codes=FATAL_STATUS_CODES,
+    )
+
+
 # ── Command line + config file ───────────────────────────────────────────────
 
 def load_config(path: Path) -> dict:
@@ -209,13 +231,15 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--delete-originals", action="store_true",
                         help="Delete original media/composite and .txt once a snapshot is created, "
                              "keeping only the final _snapshot file per post")
-    parser.add_argument("--post-delay", nargs=2, type=float, metavar=("MIN", "MAX"), default=(3.0, 8.0),
-                        help="Random pause in seconds between posts in a multi-post run (default: 3 8; "
+    parser.add_argument("--post-delay", nargs=2, type=float, metavar=("MIN", "MAX"), default=(6.0, 15.0),
+                        help="Random pause in seconds between posts in a multi-post run (default: 6 15; "
                              "0 0 disables), on top of instaloader's own per-request sleeps")
-    parser.add_argument("--max-batch", type=int, default=100,
-                        help="Refuse requests for more than this many posts at once (default: 100)")
-    parser.add_argument("--daily-cap", type=int, default=300,
-                        help="Most posts downloaded per rolling 24 hours (default: 300; 0 disables)")
+    parser.add_argument("--max-batch", type=int, default=50,
+                        help="Refuse requests for more than this many posts at once (default: 50)")
+    parser.add_argument("--daily-cap", type=int, default=100,
+                        help="Most posts downloaded per rolling 24 hours (default: 100; 0 disables)")
+    parser.add_argument("--cooldown-minutes", type=int, default=120,
+                        help="Refuse all downloads this long after Instagram pushes back (default: 120)")
     parser.add_argument("--extension-id", help="Only accept connections from this Chrome extension ID "
                         "(chrome://extensions shows it); default: any extension")
     return parser
@@ -244,6 +268,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         parser.error("max_batch must be at least 1")
     if args.daily_cap < 0:
         parser.error("daily_cap must be 0 or more")
+    if args.cooldown_minutes < 1:
+        parser.error("cooldown_minutes must be at least 1")
     if bool(args.sessionid) != bool(args.csrftoken):
         parser.error("--sessionid and --csrftoken must be given together")
     if args.filename_pattern != DEFAULT_FILENAME_PATTERN and not args.no_post_process:
@@ -272,18 +298,10 @@ def main() -> None:
         post_delay=(args.post_delay[0], args.post_delay[1]),
         max_batch=args.max_batch,
         daily_cap=args.daily_cap,
+        cooldown_seconds=args.cooldown_minutes * 60,
     )
 
-    # Embed the absolute output path in dirname_pattern so instaloader never sanitizes the base
-    # path (it only sanitizes the {target} substitution). On Windows, passing a full path as
-    # `target` replaces colons and backslashes with full-width lookalikes, breaking path resolution.
-    loader = instaloader.Instaloader(
-        dirname_pattern=str(output_dir / "{target}"),
-        filename_pattern=args.filename_pattern,
-        download_video_thumbnails=False,
-        save_metadata=False,
-        post_metadata_txt_pattern="",  # we write our own JSON txt
-    )
+    loader = build_loader(output_dir, args.filename_pattern)
     downloader = Downloader(loader, settings)
     state = LoginState(loader, downloader)
 

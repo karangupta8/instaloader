@@ -269,3 +269,96 @@ def test_downloaded_shortcodes_needs_a_snapshot_when_snapshots_are_on(tmp_path):
 
     assert snapshots_on.downloaded_shortcodes(codes) == ["AAA", "CCC"]  # BBB has no snapshot yet
     assert snapshots_off.downloaded_shortcodes(codes) == ["AAA", "BBB", "CCC"]  # txt-only DDD never counts
+
+
+# ── the soft-block signals that were missed before (401 "please wait", failures in a row) ──
+
+PLEASE_WAIT = ('JSON Query to graphql/query: 401 Unauthorized - "fail" status, message '
+               '"Please wait a few minutes before you try again."')
+
+
+@pytest.mark.parametrize("message", [
+    PLEASE_WAIT,
+    'JSON Query to api/v1/media/1/info/: 403 Forbidden - "fail" status, message "login_required"',
+    'message "checkpoint_required"', 'message "challenge_required"', "429 Too Many Requests",
+])
+def test_soft_block_messages_count_as_stop_errors(message):
+    assert is_stop_error(instaloader.ConnectionException(message))
+
+
+def test_a_401_please_wait_during_comments_stops_the_batch(tmp_path):
+    def comments_throttled():
+        raise instaloader.ConnectionException(PLEASE_WAIT)
+
+    dl, loader = make_downloader(tmp_path)
+    refs = [pipeline.PostRef("AAA", lambda: make_post("AAA", get_comments=comments_throttled)),
+            pipeline.PostRef("BBB", lambda: make_post("BBB")),
+            pipeline.PostRef("CCC", lambda: make_post("CCC"))]
+
+    result = dl.run_batch(refs, None, total=3)
+
+    assert "aborted" in result and "BBB" not in loader.downloaded and "CCC" not in loader.downloaded
+    assert dl.cooldown_remaining() > 0
+
+
+def test_failures_in_a_row_stop_the_batch_and_cool_down(tmp_path):
+    dl, _ = make_downloader(tmp_path, max_consecutive_failures=2)
+    boom = instaloader.ConnectionException("Fetching Post metadata failed.")
+    refs, fetched = refs_for("AAA", "BBB", "CCC", "DDD", fail={"AAA": boom, "BBB": boom})
+
+    result = dl.run_batch(refs, None, total=4)
+
+    assert fetched == ["AAA", "BBB"]  # CCC and DDD are never requested
+    assert result["failed"] == 2 and "in a row" in result["aborted"]
+    assert dl.cooldown_remaining() > 0
+
+
+def test_a_success_resets_the_failure_streak(tmp_path):
+    dl, _ = make_downloader(tmp_path, max_consecutive_failures=2)
+    boom = instaloader.ConnectionException("Fetching Post metadata failed.")
+    refs, fetched = refs_for("AAA", "BBB", "CCC", "DDD", fail={"AAA": boom, "CCC": boom})
+
+    result = dl.run_batch(refs, None, total=4)
+
+    assert fetched == ["AAA", "BBB", "CCC", "DDD"] and "aborted" not in result
+    assert (result["downloaded"], result["failed"]) == (2, 2)
+
+
+def test_deleted_posts_do_not_count_as_a_throttling_streak(tmp_path):
+    dl, _ = make_downloader(tmp_path, max_consecutive_failures=2)
+    gone = instaloader.QueryReturnedNotFoundException("404")
+    refs, fetched = refs_for("AAA", "BBB", "CCC", fail={"AAA": gone, "BBB": gone})
+
+    result = dl.run_batch(refs, None, total=3)
+
+    assert fetched == ["AAA", "BBB", "CCC"] and result["downloaded"] == 1 and "aborted" not in result
+
+
+def test_instaloader_aborts_immediately_on_a_401_instead_of_retrying():
+    """Real instaloader code path: with the fatal codes we configure, one 401 raises, no retries."""
+    import json as jsonlib
+    from pathlib import Path
+    import server
+
+    class Resp:
+        status_code, reason, is_redirect = 401, "Unauthorized", False
+        headers = {"Content-Type": "application/json"}
+        text = jsonlib.dumps({"status": "fail", "message": "Please wait a few minutes before you try again."})
+        def json(self):
+            return jsonlib.loads(self.text)
+
+    loader = server.build_loader(Path("."), pipeline.DEFAULT_FILENAME_PATTERN)
+    loader.context.sleep = False
+    calls = []
+    loader.context._session.get = lambda *a, **k: calls.append(1) or Resp()
+
+    with pytest.raises(instaloader.AbortDownloadException):
+        loader.context.get_json("graphql/query", {"query_hash": "abc"})
+    assert len(calls) == 1  # no retry storm
+    assert loader.context.fatal_status_codes == [401, 429]
+
+
+def test_defaults_are_conservative():
+    s = Settings(output_dir=pipeline.Path("."))
+    assert s.post_delay[0] >= 5 and s.max_batch <= 50 and 0 < s.daily_cap <= 100
+    assert s.cooldown_seconds >= 60 * 60 and s.max_consecutive_failures == 2
