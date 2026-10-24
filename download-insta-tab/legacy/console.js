@@ -14,11 +14,11 @@
     - Hashtag           instagram.com/explore/tags/cats/
     - Single post       instagram.com/p/AbCdEfG/ or /reel/AbCdEfG/
 
-  Requires server.py running locally:
-      python download-insta-tab/server.py
+  Requires server.py running locally, started with your cookies (this legacy flow
+  has no extension to send them):
+      python download-insta-tab/server.py --sessionid <ID> --csrftoken <TOKEN>
 
   Uses WebSocket (ws://) to talk to localhost — allowed by Instagram's CSP.
-  Auth is automatic: sends your session cookies on first call.
 */
 
 async function igdl(countOrOptions = 10, skip = 0) {

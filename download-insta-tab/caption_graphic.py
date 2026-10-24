@@ -10,6 +10,7 @@ import json
 import logging
 import subprocess
 import shutil
+import sys
 import tempfile
 from pathlib import Path
 
@@ -486,11 +487,69 @@ def create_snapshot(media_path: Path, txt_path: Path, out_path: Path) -> "Path |
         raise CaptionGraphicError(f"Unsupported media type: {suffix}")
 
 
+# ── Directory processing (used by the CLI below and by postprocess.py) ──────────
+
+def _retire_originals(media_path: Path, txt_path: Path, *, delete: bool, move_to: "Path | None") -> None:
+    """After a snapshot exists: move the media + .txt to move_to, or delete them, if asked."""
+    if not (move_to or delete):
+        return
+    try:
+        if move_to:
+            move_to.mkdir(parents=True, exist_ok=True)
+            shutil.move(str(media_path), str(move_to / media_path.name))
+            shutil.move(str(txt_path), str(move_to / txt_path.name))
+        else:
+            media_path.unlink()
+            txt_path.unlink()
+    except OSError as exc:
+        logger.warning(f"Could not {'move' if move_to else 'delete'} originals of {media_path.name}: {exc}")
+
+
+def process_directory(target_dir: Path, *, overwrite: bool = False, delete: bool = False,
+                      move_to: "Path | None" = None, shortcode: "str | None" = None) -> tuple[int, int, int]:
+    """Create a snapshot for every {name}.txt + {name}.<media> pair in target_dir
+    (only those of `shortcode`, if given).
+
+    Works on single posts and already-built `_carousel` composites alike. Returns
+    (generated, already_existed, errors).
+    """
+    processed = skipped = errors = 0
+    for txt_path in sorted(target_dir.glob("*.txt")):
+        stem = txt_path.stem  # e.g. "natgeo_ABC123" or "user_ABC123_carousel"
+        if shortcode and f"_{shortcode}" not in stem:
+            continue
+        media_path = next((target_dir / f"{stem}{ext}" for ext in sorted(IMAGE_EXTS | VIDEO_EXTS)
+                           if (target_dir / f"{stem}{ext}").exists()), None)
+        if media_path is None:
+            continue  # no media for this txt
+
+        snap_ext = ".mp4" if media_path.suffix.lower() in VIDEO_EXTS else ".jpg"
+        snapshot_path = target_dir / f"{stem}_snapshot{snap_ext}"
+
+        if snapshot_path.exists() and not overwrite:
+            skipped += 1
+            _retire_originals(media_path, txt_path, delete=delete, move_to=move_to)
+            continue
+
+        try:
+            print(f"  {media_path.name} ... ", end="", flush=True)
+            result = create_snapshot(media_path, txt_path, snapshot_path)
+            if result:
+                print(f"-> {result.name}")
+                processed += 1
+                _retire_originals(media_path, txt_path, delete=delete, move_to=move_to)
+            else:
+                print("skipped (no usable metadata)")
+        except CaptionGraphicError as exc:
+            print(f"\n  ERROR {media_path.name}: {exc}", file=sys.stderr)
+            errors += 1
+    return processed, skipped, errors
+
+
 # ── Standalone CLI ────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
     import argparse
-    import sys
 
     logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
 
@@ -519,62 +578,7 @@ if __name__ == "__main__":
         print(f"ERROR: {target_dir} is not a directory", file=sys.stderr)
         sys.exit(1)
 
-    all_exts = IMAGE_EXTS | VIDEO_EXTS
-    processed = skipped = errors = 0
-
-    for txt_path in sorted(target_dir.glob("*.txt")):
-        stem = txt_path.stem  # e.g. "natgeo_ABC123" or "user_ABC123_carousel"
-        # Find a matching media file
-        media_path = None
-        for ext in all_exts:
-            candidate = target_dir / f"{stem}{ext}"
-            if candidate.exists():
-                media_path = candidate
-                break
-        if media_path is None:
-            continue  # no media for this txt
-
-        # Determine snapshot output path
-        snap_ext = ".mp4" if media_path.suffix.lower() in VIDEO_EXTS else ".jpg"
-        snapshot_path = target_dir / f"{stem}_snapshot{snap_ext}"
-
-        if snapshot_path.exists() and not args.overwrite:
-            skipped += 1
-            if move_to:
-                move_to.mkdir(parents=True, exist_ok=True)
-                try:
-                    shutil.move(str(media_path), str(move_to / media_path.name))
-                    shutil.move(str(txt_path), str(move_to / txt_path.name))
-                except OSError as exc:
-                    logger.warning(f"Could not move files: {exc}")
-            elif args.delete:
-                try:
-                    media_path.unlink()
-                    txt_path.unlink()
-                except OSError as exc:
-                    logger.warning(f"Could not delete files: {exc}")
-            continue
-
-        try:
-            print(f"  {media_path.name} ... ", end="", flush=True)
-            result = create_snapshot(media_path, txt_path, snapshot_path)
-            if result:
-                print(f"-> {result.name}")
-                processed += 1
-                if move_to:
-                    move_to.mkdir(parents=True, exist_ok=True)
-                    try:
-                        shutil.move(str(media_path), str(move_to / media_path.name))
-                        shutil.move(str(txt_path), str(move_to / txt_path.name))
-                    except OSError as exc:
-                        logger.warning(f"Could not move files: {exc}")
-                elif args.delete:
-                    media_path.unlink()
-                    txt_path.unlink()
-            else:
-                print("skipped (no usable metadata)")
-        except CaptionGraphicError as exc:
-            print(f"\n  ERROR {media_path.name}: {exc}", file=sys.stderr)
-            errors += 1
+    processed, skipped, errors = process_directory(
+        target_dir, overwrite=args.overwrite, delete=args.delete, move_to=move_to)
 
     print(f"\nDone: {processed} generated, {skipped} already existed, {errors} errors.")

@@ -1,305 +1,149 @@
 # download-insta-tab
 
-Download from any Instagram page in your browser using your active session.
-Built as a thin layer on top of [Instaloader](https://instaloader.github.io/) — the parent package handles all the hard parts.
-When upstream Instaloader updates, this picks up the changes automatically.
-
-## How it works
+Download Instagram posts, reels, saved items, profiles and hashtags from the pages you are already looking at, using your logged-in Chrome session. A thin layer on top of [Instaloader](https://instaloader.github.io/): the parent package does the hard parts, so upstream fixes are picked up automatically.
 
 ```
-Extract cookies from DevTools
-         │
-         ▼
-python server.py ──(via WebSocket)──▶ Chrome console (any IG page)
-         │                                ▲
-         │                                │
-         └────────── instaloader ────────┘
-                                    (downloads to disk)
+Chrome extension ──(reads your cookies, adds buttons)──▶ server.py ──▶ instaloader ──▶ files on disk
+                      ws://127.0.0.1:7432                  (this folder)
 ```
 
-1. Get your Instagram `sessionid` and `csrftoken` from DevTools.
-2. Start `server.py` with these cookies.
-3. Open any Instagram page in Chrome.
-4. Paste `console.js` into DevTools console and call `await igdl(10)`.
-5. Instaloader downloads everything at full resolution using your authenticated session.
+No password, no admin rights, no copying tokens out of DevTools.
 
-**No password, no admin, no browser_cookie3. WebSocket bypasses Instagram's Content Security Policy.**
+## Quick start
 
----
+1. **Install dependencies:** `pip install instaloader websockets Pillow` (plus `ffmpeg` on your PATH for videos).
+2. **Load the extension:** `chrome://extensions` → enable *Developer mode* → *Load unpacked* → pick `download-insta-tab/extension`.
+3. **Start the server:** `python download-insta-tab/server.py --output C:\Users\you\Downloads`
+4. **Browse Instagram** (logged in) and click the buttons below.
 
-## Usage
+To stop typing flags every time, edit `config.toml` (versioned; `config.example.toml` is the annotated template) to set your defaults; then it is just `python download-insta-tab/server.py`.
 
-**Step 1 — Get your cookies from DevTools**
+## Using the extension
 
-1. Open any Instagram page and press `F12` (DevTools).
-2. Go to **Application** tab → **Cookies** → `https://www.instagram.com`.
-3. Find and copy the values of:
-   - `sessionid`
-   - `csrftoken`
-
-**Step 2 — Start the server**
-
-```bash
-python download-insta-tab/server.py --sessionid <YOUR_SESSIONID> --csrftoken <YOUR_CSRFTOKEN>
-
-# With options
-python download-insta-tab/server.py \
-  --sessionid <YOUR_SESSIONID> \
-  --csrftoken <YOUR_CSRFTOKEN> \
-  --output C:\Users\karan\Downloads \
-  --port 7432 \
-  --filename-pattern "{date}_{owner_username}_{shortcode}"
-```
-
-The server will verify your credentials and display:
-```
-[ig-dl] Authenticated as @yourusername
-[ig-dl] Output : /path/to/output
-[ig-dl] Listening on ws://localhost:7432
-```
-
-**Step 3 — Open any Instagram page in Chrome** (must be logged in).
-
-Supported pages:
-| URL pattern | Downloads |
+| Where | What you get |
 |---|---|
-| `instagram.com/natgeo/` | Profile posts |
-| `instagram.com/you/saved/` | Your saved posts |
-| `instagram.com/explore/tags/cats/` | Hashtag posts |
-| `instagram.com/p/AbCdEfG/` or `/reel/…` | Single post |
+| Any post / reel (feed, grid tile, post page) | A round **⬇** button. Click to download that post. |
+| Saved page | **⬇ Download all visible** pill: checks what's new, asks how many, downloads them. |
+| Profile or hashtag page | **⬇ Download top posts** pill: asks how many of the newest, downloads them. |
 
-**Step 4 — Open DevTools console and run**
+- **Already downloaded** posts get a green outline and a green ✓, and are never fetched twice.
+- A running batch shows a live `12/40` counter; **click the pill again to cancel** (the post in flight finishes first).
+- The **toolbar icon** shows `ON` (server up, logged in), `OFF` (server not running) or `!` (not logged in to Instagram). Click it for details.
+- Posts clicked on the Saved page go to `<output>/_saved/` and are stamped in download order; everywhere else they go to `<output>/<username>/`.
 
-Press `F12` → **Console**, paste `console.js`, then call:
-
-```js
-await igdl()          // top 10 posts from current page
-await igdl(30)        // top 30 posts
-await igdl(10, 5)     // download 10 posts, skipping first 5
-await igdl({ count: 5, skip: 2, port: 7432 })   // explicit options
-```
-
----
-
-## Chrome extension (no cookie copying)
-
-The `extension/` folder is a Manifest V3 extension that removes the DevTools legwork:
-it reads your `sessionid`/`csrftoken` from Chrome's cookie jar, hands them to the server,
-and overlays a download button on every post, reel and saved-grid tile.
-
-1. `chrome://extensions` → enable **Developer mode** → **Load unpacked** → pick `download-insta-tab/extension`.
-2. Start the server with no cookies: `python download-insta-tab/server.py --output C:\Users\karan\Downloads`
-3. Open Instagram and click the round button at the top-left of any post/reel/tile
-   (⬇ idle, … working, ✓ saved, ✕ failed — hover for details).
-
-- **Already downloaded:** tiles whose files are already on disk get a green ✓ and outline, and are skipped on re-download. With snapshots enabled a post only counts once its `_snapshot` file exists, so interrupted downloads are retried.
-- **Download all visible** (saved pages): checks what's new, then asks how many to download (blank = all).
-- **Toolbar icon:** badge shows `ON` (server up, logged in), `OFF` (server not running) or `!` (not logged in); click it for details.
-
-The extension also sends Chrome's real user-agent, client hints (`sec-ch-ua*`) and `Accept-Language`, and the server adds `sec-fetch-*` headers, on `www.instagram.com` requests, so they look like the browser that owns the session instead of instaloader's generic Linux client. Media (CDN) downloads and the iPhone comments endpoint are left untouched.
-
-Fresh cookies are sent on every click, so a refreshed or re-logged-in session just works.
-The server only accepts WebSocket connections from `chrome-extension://` and `https://www.instagram.com` origins.
-
----
-
-## Output structure
-
-For each downloaded post you get:
+## What you get on disk
 
 ```
 <output>/
-└── <username>/
-    ├── username_shortcode.jpg          ← original media
-    ├── username_shortcode.txt          ← caption + top 5 comments (JSON)
-    ├── username_shortcode_snapshot.jpg ← caption graphic appended to image
-    └── username_shortcode_carousel.jpg ← grid composite (carousel posts only)
-        username_shortcode_carousel_snapshot.jpg
+├── <username>/
+│   ├── username_shortcode_snapshot.jpg   ← image + caption/comments panel (videos: _snapshot.mp4)
+│   └── username_shortcode_carousel_snapshot.jpg   ← carousels: collage + panel
+├── _saved/            saved posts (":saved" on Linux/Mac)
+├── #<tag>/            hashtag posts
+├── downloads.jsonl    one line per post: downloaded / skipped / failed / aborted, with timestamp
+└── .ig-dl-state.json  persisted cooldown (see below)
 ```
 
-- **Saved posts** go to `<output>/_saved/` (Windows) or `<output>/:saved/` (Linux/Mac).
-- **Hashtag posts** go to `<output>/#tagname/`.
-- **Videos** produce `_snapshot.mp4` (panel appended via ffmpeg).
-- **Carousel posts** produce a collage image/video grid AND a snapshot of that collage.
+By default the original media and `.txt` stay next to each snapshot; start with `--delete-originals` to keep only the `_snapshot` file per post. Every file's modified time is set to its download order, so sorting a folder by *Date Modified* reproduces the order posts appeared on the source page (handy for working through Saved posts and unsaving them as you go).
 
----
+The caption panel is drawn from the post's caption and its top 5 comments. It sits to the right of portrait images (max 400 px), below square/landscape ones, and below videos (ffmpeg, audio kept).
 
-## Server flags
+## Server options
+
+Every option can be a command-line flag or a key in `config.toml` (flag wins). Config keys are the flag names with underscores.
 
 | Flag | Default | Description |
 |---|---|---|
-| `--sessionid` | *(required)* | Instagram `sessionid` cookie value |
-| `--csrftoken` | *(required)* | Instagram `csrftoken` cookie value |
-| `--output`, `-o` | `.` | Root directory for all downloads |
-| `--port`, `-p` | `7432` | WebSocket port to listen on |
-| `--filename-pattern` | `{owner_username}_{shortcode}` | Instaloader filename template |
-| `--no-post-process` | off | Skip all post-processing (collage + caption graphic) |
-| `--no-collage` | off | Skip carousel collage/concat only |
-| `--no-graphic` | off | Skip caption graphic snapshot only |
-| `--post-delay MIN MAX` | `3 8` | Random pause (seconds) between posts in a multi-post run, on top of instaloader's own per-request sleeps. `0 0` disables |
+| `--output`, `-o` | `.` | Root folder for downloads |
+| `--port`, `-p` | `7432` | WebSocket port |
+| `--delete-originals` | off | Keep only the final `_snapshot` file per post |
+| `--no-post-process` | off | Skip collages and caption graphics entirely |
+| `--no-collage` | off | Skip carousel collages only |
+| `--no-graphic` | off | Skip caption snapshots only |
+| `--post-delay MIN MAX` | `3 8` | Random pause (seconds) between posts in a run; `0 0` disables |
 | `--max-batch` | `100` | Refuse requests for more posts than this at once |
-| `--delete-originals` | off | Delete original media/composite + `.txt` once a snapshot is created, keeping only the final `_snapshot` file per post |
+| `--daily-cap` | `300` | Most posts per rolling 24 h; `0` disables |
+| `--extension-id` | any | Only accept this Chrome extension (ID shown on `chrome://extensions`) |
+| `--filename-pattern` | `{owner_username}_{shortcode}` | Custom patterns require `--no-post-process`: snapshots, collages and the already-downloaded check rely on the default |
+| `--sessionid`, `--csrftoken` | — | Optional. Only for use without the extension (see Legacy) |
+| `--config` | `config.toml` | Config file path |
 
-**Filename pattern tokens:** `{date}`, `{owner_username}`, `{shortcode}`, `{mediaid}`, etc.
+## Staying under Instagram's radar
 
-```bash
-# Download files only, no post-processing at all
-python download-insta-tab/server.py ... --no-post-process
+Nothing makes bulk downloading risk-free, but these layers are all on by default:
 
-# Collages yes, but skip graphic panels
-python download-insta-tab/server.py ... --no-graphic
+- **Instaloader's own limits:** a random 0–15 s sleep before every Instagram request, per-endpoint request counting in sliding windows, and automatic backoff on HTTP 429.
+- **Pacing between posts:** a random `--post-delay` pause on top (3–8 s).
+- **Caps:** `--max-batch` per request and `--daily-cap` per rolling 24 h (counted from `downloads.jsonl`).
+- **Stop, don't push:** on repeated 429s, a checkpoint / `feedback_required`, or a login redirect — including from the comments fetch — the batch stops immediately and **all downloads are refused for 15 minutes**. The cooldown is saved in the output folder, so restarting the server doesn't clear it.
+- **No repeat traffic:** posts already on disk are never re-fetched.
+- **Looks like your browser:** requests carry Chrome's real user-agent, client hints (`sec-ch-ua*`), `Accept-Language` and `sec-fetch-*` headers, only toward `www.instagram.com`. (The TLS fingerprint still differs from Chrome's.)
+- **Local-only plumbing:** the status icon, duplicate checks and badges talk only to your local server, never to Instagram.
 
-# Graphics yes, but no carousel collages
-python download-insta-tab/server.py ... --no-collage
+Habits that matter more than any setting: download in modest batches (a few dozen), don't run other Instagram automation on the same account, and avoid heavy Instagram app use while a batch runs.
 
-# Keep only the final snapshot per post, delete originals/composite/txt as it goes
-python download-insta-tab/server.py ... --delete-originals
-```
+## Offline tools
 
----
+### `postprocess.py` — one command for already-downloaded folders
 
-## Caption graphic
-
-After each download, `caption_graphic.py` generates an Instagram-style panel from the saved `.txt` metadata and appends it to the media file:
-
-```
-┌──────────────────────────────────────┐
-│  Caption text, word-wrapped…         │
-│  #hashtag and @mention in blue       │
-│  ────────────────────────────────    │
-│  @user1  First comment text…         │
-│    ♥ 142                             │
-│  @user2  Another comment…            │
-└──────────────────────────────────────┘
-```
-
-- **Portrait images** (height > width): panel appended as a right-hand sidebar (max 400 px wide).
-- **Square / landscape images**: panel appended as a strip below.
-- **Videos**: panel composited below via ffmpeg (`vstack`), audio preserved.
-
-Requires **Pillow** (`pip install Pillow`) and **ffmpeg** on your PATH for video posts.
-
-### Retroactive application
-
-Caption graphics are generated automatically during download. If you downloaded posts before this feature existed, or ran with `--no-graphic`, apply them retroactively with the standalone CLI:
+Runs the same steps the server runs after each download: carousel collages, then caption snapshots. Use it for posts downloaded with `--no-post-process`, or before a feature existed. Safe to re-run.
 
 ```bash
-# Apply caption graphics to everything in a folder that doesn't have one yet
-python download-insta-tab/caption_graphic.py C:\Users\karan\Downloads\_saved
-
-# Re-generate snapshots that already exist
-python download-insta-tab/caption_graphic.py C:\Users\karan\Downloads\_saved --overwrite
-
-# Delete original media and .txt files after creating snapshot
-python download-insta-tab/caption_graphic.py C:\Users\karan\Downloads\_saved --delete
-
-# Move original files to a folder instead of deleting them
-python download-insta-tab/caption_graphic.py C:\Users\karan\Downloads\_saved --move-to C:\Users\karan\Downloads\_trash
+python download-insta-tab/postprocess.py C:\Users\you\Downloads\_saved
+python download-insta-tab/postprocess.py <dir> --delete-originals         # keep only *_snapshot files
+python download-insta-tab/postprocess.py <dir> --move-to <archive-dir>    # archive instead of delete
+python download-insta-tab/postprocess.py <dir> --overwrite                # regenerate existing snapshots
+python download-insta-tab/postprocess.py <dir> --shortcode AbCdEfG        # one post only
+python download-insta-tab/postprocess.py <dir> --no-collage | --no-graphic --keep-slides --cell-size 800
 ```
 
-This scans for any `{name}.txt` + `{name}.{jpg|mp4|…}` pair without a matching `{name}_snapshot.*`, generates the snapshot, and can optionally **delete the original media and `.txt`** files using the `--delete` flag. Works on single posts and already-built `_carousel.*` composites alike.
+(`carousel_processor.py` and `caption_graphic.py` still work as separate CLIs if you want only one step.)
 
----
+### `scrape_comments.py` — every comment on one post
 
-## Carousel processor
-
-`carousel_processor.py` detects multi-image/video carousel posts and:
-
-1. Assembles individual slides into a single composite grid image (images) or concatenated video.
-2. Optionally appends the caption graphic to the composite.
-
-It can also be run standalone on a directory of already-downloaded files to build collages from raw slides (`_1.jpg`, `_2.jpg`, …).
-
-> **Note:** If the server already processed a carousel, the individual slides are deleted and only `_carousel.jpg` remains — `carousel_processor.py` will correctly report "No carousels found" in that case. To retroactively apply caption graphics to already-processed files, use `caption_graphic.py` instead (see below).
+Dumps the full comment thread (with replies) to a text file. This one needs cookies on the command line, since it runs without the extension: DevTools → Application → Cookies → `https://www.instagram.com` → copy `sessionid` and `csrftoken`.
 
 ```bash
-# Process all carousels found in a directory
-python download-insta-tab/carousel_processor.py C:\Users\karan\Downloads\_saved
-
-# One specific shortcode only
-python download-insta-tab/carousel_processor.py C:\Users\karan\Downloads\_saved --shortcode AbCdEfG
-
-# Skip the caption graphic
-python download-insta-tab/carousel_processor.py C:\Users\karan\Downloads\_saved --no-graphic
-
-# Skip the collage entirely (just rename/tidy files)
-python download-insta-tab/carousel_processor.py C:\Users\karan\Downloads\_saved --no-collage
-
-# Keep individual slide files after compositing
-python download-insta-tab/carousel_processor.py C:\Users\karan\Downloads\_saved --keep-slides
-
-# Move individual slide files to a folder instead of deleting them
-python download-insta-tab/carousel_processor.py C:\Users\karan\Downloads\_saved --move-to C:\Users\karan\Downloads\_slides_backup
-
-# Custom cell size for the grid (default 640 px)
-python download-insta-tab/carousel_processor.py C:\Users\karan\Downloads\_saved --cell-size 800
-
-# Delete the composite + its .txt once a snapshot is created, keeping only _carousel_snapshot.*
-python download-insta-tab/carousel_processor.py C:\Users\karan\Downloads\_saved --delete-originals
+python download-insta-tab/scrape_comments.py AbCdEfG --sessionid "..." --csrftoken "..." [--output out.txt] [--max-comments 150]
 ```
 
-Requires **Pillow** and **ffmpeg**.
+> Those cookies give full access to your account. Never commit or share them. `keys.txt` in this folder is git-ignored for that purpose.
 
----
+## Legacy: no extension
 
-## Automated Injection (`inject_and_run.py`)
+`legacy/` keeps the pre-extension flow working and unchanged:
 
-Instead of manually copying and pasting `console.js` into the browser console, you can use `inject_and_run.py` to automate the process.
-
-This script connects to your running Chrome instance, lists your open tabs, injects the script, and runs the `igdl` command with parameters.
-
-Requires starting Chrome with remote debugging enabled:
-```powershell
-chrome.exe --remote-debugging-port=9222
-```
-
-Then run:
-```powershell
-python download-insta-tab/inject_and_run.py --count 10 --skip 0
-```
-
-See `COMMANDS.md` for full details and arguments.
-
----
+- `legacy/console.js` — paste into the DevTools console on an Instagram page, then `await igdl()`, `await igdl(30)`, `await igdl(10, 5)` (count, skip) or `await igdl({ count: 5, skip: 2 })`. Start the server with `--sessionid` and `--csrftoken` for this flow.
+- `legacy/inject_and_run.py` — injects `console.js` into a Chrome started with `--remote-debugging-port=9222` (needs `pip install playwright`): `python download-insta-tab/legacy/inject_and_run.py --count 10`.
+- `legacy/instagram-page-downloader.js` — the original browser-only script (deprecated).
 
 ## Files
 
 | File | Purpose |
 |---|---|
-| `server.py` | Local WebSocket server — authenticates, downloads, post-processes |
-| `console.js` | Paste into DevTools on any Instagram page |
-| `carousel_processor.py` | Carousel collage builder; also runnable as a standalone CLI |
-| `caption_graphic.py` | Generates Instagram-style caption+comments panel and appends it to media |
-| `scrape_comments.py` | Dumps every comment (and reply) on a single post to a `.txt` file |
-| `inject_and_run.py` | Automates script injection and execution via CDP |
-| `instagram-page-downloader.js` | Legacy standalone browser-only script (deprecated) |
+| `server.py` | WebSocket server, command line and config file |
+| `pipeline.py` | The download engine: one pipeline for every route, plus all safety rails |
+| `session.py` | Cookie login and browser-identity headers (shared with `scrape_comments.py`) |
+| `extension/` | The Chrome extension (Manifest V3) |
+| `postprocess.py` | Offline collage + snapshot command |
+| `carousel_processor.py`, `caption_graphic.py` | The collage builder and the caption panel renderer |
+| `scrape_comments.py` | Full comment thread dump |
+| `config.example.toml` | Template for `config.toml` |
+| `tests/` | `python -m pytest download-insta-tab/tests` |
+| `legacy/` | Pre-extension scripts |
 
----
+## Troubleshooting
 
-## Dependencies
-
-| Package | Required for |
-|---|---|
-| `instaloader` | Core download engine (parent package) |
-| `websockets` | WebSocket server |
-| `Pillow` | Image collage and caption panel |
-| `ffmpeg` (system) | Video concat and caption panel on videos |
-| `playwright` | Automated script injection |
-
-Install Python dependencies:
-```bash
-pip install instaloader websockets Pillow playwright
-```
-
----
+- **Icon shows `OFF`:** the server isn't running (or isn't on port 7432).
+- **Icon shows `!`:** you're not logged in to instagram.com in this Chrome profile; the tooltip says which cookie is missing.
+- **"Cooling down…":** Instagram pushed back recently; wait it out (the message says how long).
+- **Pill stuck on "downloading…":** reload the extension and the tab; the server stops a batch whose browser connection is gone.
+- **A failed WebSocket error on the extension's page:** harmless; Chrome logs it whenever the server was down at that moment.
 
 ## Notes
 
-- **Rate-limit safety:** instaloader sleeps a random 0–15 s before every Instagram request, tracks per-endpoint request counts in sliding windows, and backs off on HTTP 429. On top of that the server pauses `--post-delay` seconds between posts, caps a request at `--max-batch` posts, and — if Instagram answers with repeated 429s, a checkpoint/`feedback_required`, or a login redirect — stops the batch immediately and refuses new downloads for 15 minutes. Already-downloaded posts are never re-fetched. Don't run other Instagram clients, or several servers, with the same account at the same time.
-- The server only listens on `127.0.0.1` — your cookies never leave your machine.
-- Session cookies typically last weeks to months; restart the server with fresh cookies if authentication fails.
-- `--no-post-process` overrides `--no-collage` and `--no-graphic` — when set, nothing extra runs.
-- If `--no-collage` is set but `--no-graphic` is not, no graphic is generated for carousel posts (there is no composite to attach it to).
-- Saved posts use `_saved` as the folder name on Windows (`:` is not allowed in Windows directory names).
-- `--delete-originals` only deletes a post's pre-snapshot files (media/composite + `.txt`) *after* its snapshot is successfully created, so a post never loses its files if snapshot generation fails; it has no effect if `--no-post-process` or `--no-graphic` disables snapshots.
-- Every file's modified time is stamped with its download order (not Instagram's default of the post's original creation date), so sorting a folder by "Date Modified" in a file explorer reproduces the order posts appeared on the source page (e.g. most-recently-saved-first for Saved posts) — handy for working through Saved posts and unsaving them as you go, without checking each one's thumbnail.
+- The server listens on `127.0.0.1` only, and rejects WebSocket connections from any origin except `instagram.com` and Chrome extensions (pin yours with `--extension-id`). Your cookies never leave your machine.
+- Session cookies last weeks to months; if Instagram logs you out, just log in again in Chrome.
+- If `--no-collage` is set but `--no-graphic` is not, carousels get no graphic (there is no composite to attach it to).
+- `--delete-originals` only deletes a post's pre-snapshot files *after* its snapshot is created, so a post never loses its files if snapshot generation fails; it has no effect with `--no-post-process` or `--no-graphic`.
+- Python 3.10+ (3.11+ for `config.toml`).

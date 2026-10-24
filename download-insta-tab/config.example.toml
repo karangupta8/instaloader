@@ -1,0 +1,17 @@
+# Template for config.toml. Command-line flags override these values.
+# Keys are the long flag names with underscores. On Windows use single quotes for paths.
+
+output = 'C:\Users\you\Downloads'
+delete_originals = true        # keep only the final *_snapshot file per post
+
+# no_post_process = false      # skip collage + caption graphic entirely
+# no_collage = false
+# no_graphic = false
+
+# Rate-limit safety (see README "Staying under Instagram's radar")
+post_delay = [3.0, 8.0]        # random pause between posts in a run, seconds
+max_batch = 100                # most posts accepted in one request
+daily_cap = 300                # most posts per rolling 24 hours (0 = off)
+
+# port = 7432
+# extension_id = "abcdefghijklmnopabcdefghijklmnop"   # only accept this Chrome extension

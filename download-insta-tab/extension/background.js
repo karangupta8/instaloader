@@ -1,11 +1,16 @@
 // Service worker: reads the Instagram cookies, talks to the local server.py over
 // WebSocket (a service worker isn't subject to Instagram's page CSP), and reports back.
-// One short-lived socket per request keeps this robust against MV3 worker sleep.
+// One short-lived socket per request keeps this robust against MV3 worker sleep; the
+// server's progress messages double as keep-alive during long batches.
 
 const SERVER_URL = "ws://127.0.0.1:7432";
 const IG_URL = "https://www.instagram.com";
 const STATUS_ALARM = "igdl-status";
 const SHORTCODE_OK = /^[A-Za-z0-9_-]+$/;
+const NAME_OK = /^[^\s/\\?#]{1,100}$/u;
+const PAGE_TYPES = new Set(["profile", "hashtag"]);
+
+let activeSocket = null; // the batch currently running, so it can be cancelled
 
 async function getCookie(name) {
   const cookie = await chrome.cookies.get({ url: IG_URL, name });
@@ -47,8 +52,9 @@ async function getAuthPayload() {
 }
 
 /** Send `steps` in order over a fresh socket; each step waits for the server's reply.
- *  With no steps it resolves with the server's initial "status" message. */
-function runSession(steps) {
+ *  With no steps it resolves with the server's initial "status" message.
+ *  Options: onProgress(msg) for the server's "progress" messages, onSocket(ws) to grab the socket. */
+function runSession(steps, { onProgress, onSocket } = {}) {
   return new Promise((resolve, reject) => {
     let ws;
     try {
@@ -57,6 +63,7 @@ function runSession(steps) {
       reject(new Error("Cannot open socket to server.py"));
       return;
     }
+    onSocket?.(ws);
     let stepIdx = 0;
     const finish = (fn, value) => {
       try { ws.close(); } catch { /* already closed */ }
@@ -67,6 +74,7 @@ function runSession(steps) {
     ws.onclose = () => reject(new Error("Connection closed before finishing"));
     ws.onmessage = ({ data }) => {
       const msg = JSON.parse(data);
+      if (msg.type === "progress") return onProgress?.(msg);
       if (msg.type === "error") return finish(reject, new Error(msg.error));
       // Server greets with "status"; replies to our steps follow.
       const expected = stepIdx === 0 ? "status" : steps[stepIdx - 1].reply;
@@ -114,6 +122,7 @@ function scheduleStatusPolling() {
 
 chrome.runtime.onInstalled.addListener(scheduleStatusPolling);
 chrome.runtime.onStartup.addListener(scheduleStatusPolling);
+
 // Only poll while an Instagram tab is open: no point probing (and logging a failed socket
 // every minute) when nothing could use the server.
 chrome.alarms.onAlarm.addListener(async (alarm) => {
@@ -124,44 +133,45 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
 
 // ── Downloads ───────────────────────────────────────────────────────────────
 
-/** Mirror console.js: the saved page downloads via the "collection" route (-> _saved folder,
- *  download-order stamping); everywhere else it is a plain single "post". */
-function downloadPayload(shortcode, fromSavedPage) {
-  return fromSavedPage
-    ? { type: "download", page_type: "collection", identifiers: [shortcode] }
-    : { type: "download", page_type: "post", identifier: shortcode };
-}
-
-/** The collection route swallows per-post errors and reports 0 instead of failing. */
+/** Judge the server's "done" message. A cancel is a normal outcome; Instagram pushing back,
+ *  or a request where nothing was saved or skipped, is an error worth showing. */
 function assertProgress(done) {
+  if (done.cancelled) return done;
   if (done.aborted) {
-    throw new Error(`Stopped early after ${done.downloaded} post(s): ${done.aborted}. ` +
-      "Instagram pushed back; downloads are paused for ~15 min. Avoid heavy use meanwhile.");
+    throw new Error(`Stopped early after ${done.downloaded} post(s): ${done.aborted}`);
   }
   if (!done.downloaded && !done.skipped) {
-    throw new Error("Nothing downloaded; see the server console for the error");
+    throw new Error(done.error || "Nothing downloaded; see the server console for the error");
   }
   return done;
 }
 
-async function downloadShortcode(shortcode, fromSavedPage) {
-  const done = await runSession([
-    { payload: await getAuthPayload(), reply: "auth_ok" },
-    { payload: downloadPayload(shortcode, fromSavedPage), reply: "done" },
-  ]);
-  return assertProgress(done);
+function relayProgress(tabId, update) {
+  if (tabId != null) chrome.tabs.sendMessage(tabId, { ...update, type: "progress" }).catch(() => {});
 }
 
-/** Saved-page bulk download: same "collection" route igdl() uses, count = every shortcode given. */
-async function downloadMany(shortcodes) {
-  const done = await runSession([
-    { payload: await getAuthPayload(), reply: "auth_ok" },
-    {
-      payload: { type: "download", page_type: "collection", identifiers: shortcodes, count: shortcodes.length, skip: 0 },
-      reply: "done",
-    },
-  ]);
-  return assertProgress(done);
+/** Authenticate, send one download request, and relay the server's progress to `tabId`. */
+async function runDownload(downloadPayload, tabId) {
+  try {
+    const done = await runSession(
+      [
+        { payload: await getAuthPayload(), reply: "auth_ok" },
+        { payload: downloadPayload, reply: "done" },
+      ],
+      { onProgress: (update) => relayProgress(tabId, update), onSocket: (ws) => { activeSocket = ws; } },
+    );
+    return assertProgress(done);
+  } finally {
+    activeSocket = null;
+  }
+}
+
+/** Mirror igdl(): the saved page downloads via the "collection" route (-> _saved folder,
+ *  download-order stamping); everywhere else it is a plain single "post". */
+function singlePayload(shortcode, fromSavedPage) {
+  return fromSavedPage
+    ? { type: "download", page_type: "collection", identifiers: [shortcode] }
+    : { type: "download", page_type: "post", identifier: shortcode };
 }
 
 async function checkDownloaded(shortcodes) {
@@ -173,7 +183,12 @@ const validCodes = (codes) =>
   Array.isArray(codes) && codes.length > 0 && codes.every((c) => typeof c === "string" && SHORTCODE_OK.test(c));
 
 const summarize = (done) => ({
-  ok: true, downloaded: done.downloaded, skipped: done.skipped ?? 0, target: done.target,
+  ok: true,
+  downloaded: done.downloaded,
+  skipped: done.skipped ?? 0,
+  failed: done.failed ?? 0,
+  cancelled: done.cancelled === true,
+  target: done.target,
 });
 
 /** Reply to `sendResponse` from a promise, converting failures to {ok:false}. */
@@ -184,26 +199,50 @@ function respond(promise, sendResponse, onOk, refresh = true) {
   return true; // async response
 }
 
-chrome.runtime.onMessage.addListener((request, _sender, sendResponse) => {
+function refuse(sendResponse, error) {
+  sendResponse({ ok: false, error });
+  return false;
+}
+
+chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
+  const tabId = sender.tab?.id;
   switch (request?.type) {
     case "download":
       if (!validCodes([request.shortcode])) return false;
-      return respond(downloadShortcode(request.shortcode, request.fromSavedPage === true), sendResponse, summarize);
-    case "download-many":
-      if (!validCodes(request.shortcodes)) {
-        sendResponse({ ok: false, error: "No valid shortcodes" });
-        return false;
+      return respond(runDownload(singlePayload(request.shortcode, request.fromSavedPage === true), tabId),
+        sendResponse, summarize);
+
+    case "download-many": // saved page: every given shortcode, via the collection route
+      if (!validCodes(request.shortcodes)) return refuse(sendResponse, "No valid shortcodes");
+      return respond(runDownload({
+        type: "download", page_type: "collection",
+        identifiers: request.shortcodes, count: request.shortcodes.length, skip: 0,
+      }, tabId), sendResponse, summarize);
+
+    case "download-page": // profile / hashtag page: the newest `count` posts
+      if (!PAGE_TYPES.has(request.page_type) || !NAME_OK.test(request.identifier ?? "")
+          || !Number.isInteger(request.count) || request.count < 1) {
+        return refuse(sendResponse, "Invalid page download request");
       }
-      return respond(downloadMany(request.shortcodes), sendResponse, summarize);
+      return respond(runDownload({
+        type: "download", page_type: request.page_type,
+        identifier: request.identifier, count: request.count, skip: 0,
+      }, tabId), sendResponse, summarize);
+
+    case "cancel-batch":
+      try { activeSocket?.send(JSON.stringify({ type: "cancel" })); } catch { /* socket already gone */ }
+      sendResponse({ ok: true });
+      return false;
+
     case "check":
-      if (!validCodes(request.shortcodes)) {
-        sendResponse({ ok: false, error: "No valid shortcodes" });
-        return false;
-      }
-      return respond(checkDownloaded(request.shortcodes), sendResponse, (downloaded) => ({ ok: true, downloaded }), false);
+      if (!validCodes(request.shortcodes)) return refuse(sendResponse, "No valid shortcodes");
+      return respond(checkDownloaded(request.shortcodes), sendResponse,
+        (downloaded) => ({ ok: true, downloaded }), false);
+
     case "status":
       refreshStatus().then(sendResponse);
       return true;
+
     default:
       return false;
   }

@@ -1,6 +1,6 @@
-// Adds a small download button over every post/reel on the page (feed articles,
-// profile/saved grid tiles) plus a floating one on single post/reel pages. Posts that are
-// already on disk (per the local server) are marked with a green ✓ and outline.
+// Adds a small download button over every post/reel on the page (feed articles, grid tiles),
+// a floating one on single post/reel pages, and a pill for whole-page downloads on saved,
+// profile and hashtag pages. Posts already on disk (per the local server) get a green outline.
 
 const SHORTCODE_RE = /\/(?:p|reel|reels)\/([A-Za-z0-9_-]+)/;
 const MARK = "data-igdl-attached";
@@ -9,6 +9,11 @@ const STATES = { idle: "⬇", busy: "…", done: "✓", fail: "✕" };
 const CHECK_DEBOUNCE_MS = 800;
 const CHECK_BATCH = 300;
 const CHECK_BACKOFF_MS = 30000;
+const DEFAULT_PAGE_COUNT = 10;
+const RESERVED_PATHS = new Set([
+  "explore", "accounts", "direct", "stories", "reels", "reel", "p",
+  "tv", "locations", "directory", "login", "challenge", "about", "legal",
+]);
 
 function shortcodeFrom(href) {
   const match = (href || "").match(SHORTCODE_RE);
@@ -21,14 +26,6 @@ function setState(btn, state, title) {
   btn.title = title;
 }
 
-// ── Already-downloaded tracking ─────────────────────────────────────────────
-
-const registry = new Set();      // { btn, getShortcode } for every button we created
-const checkedCodes = new Set();  // shortcodes the server has already been asked about
-const haveCodes = new Set();     // shortcodes known to be on disk
-let checkTimer = null;
-let backoffUntil = 0;
-
 async function send(message) {
   try {
     return await chrome.runtime.sendMessage(message);
@@ -36,6 +33,14 @@ async function send(message) {
     return { ok: false, error: err.message };
   }
 }
+
+// ── Already-downloaded tracking ─────────────────────────────────────────────
+
+const registry = new Set();      // { btn, getShortcode } for every button we created
+const checkedCodes = new Set();  // shortcodes the server has already been asked about
+const haveCodes = new Set();     // shortcodes known to be on disk
+let checkTimer = null;
+let backoffUntil = 0;
 
 function applyHave(btn) {
   setState(btn, "done", "Already downloaded");
@@ -84,6 +89,10 @@ function scheduleCheck() {
 
 // ── Per-post buttons ────────────────────────────────────────────────────────
 
+function onSavedPage() {
+  return /\/saved(\/|$)/.test(location.pathname);
+}
+
 function makeButton(getShortcode, extraClass = "") {
   const btn = document.createElement("button");
   btn.type = "button";
@@ -99,8 +108,7 @@ function makeButton(getShortcode, extraClass = "") {
     if (!shortcode || btn.dataset.state === "busy") return;
 
     setState(btn, "busy", `Downloading ${shortcode}…`);
-    const fromSavedPage = /\/saved(\/|$)/.test(location.pathname);
-    const res = await send({ type: "download", shortcode, fromSavedPage });
+    const res = await send({ type: "download", shortcode, fromSavedPage: onSavedPage() });
     if (!res?.ok) return setState(btn, "fail", res?.error || "Download failed");
     recordHave([shortcode]);
     setState(btn, "done", res.skipped ? "Already downloaded" : `Saved to ${res.target}`);
@@ -151,9 +159,25 @@ function syncFloatingButton() {
   }
 }
 
-// ── "Download all visible" (saved page only, mirrors igdl() on /saved/) ─────────
+// ── Whole-page pill: saved / profile / hashtag ──────────────────────────────
 
 let bulk = null;
+
+/** What kind of listing page this is, if any (mirrors the old igdl() page detection). */
+function pageContext() {
+  const path = location.pathname.replace(/\/$/, "");
+  if (onSavedPage()) return { kind: "saved", label: "⬇ Download all visible" };
+  const tag = path.match(/^\/explore\/tags\/([^/]+)$/);
+  if (tag) {
+    const name = decodeURIComponent(tag[1]);
+    return { kind: "hashtag", identifier: name, display: `#${name}`, label: "⬇ Download top posts" };
+  }
+  const parts = path.split("/").filter(Boolean);
+  if (parts.length === 1 && !RESERVED_PATHS.has(parts[0])) {
+    return { kind: "profile", identifier: parts[0], display: `@${parts[0]}`, label: "⬇ Download top posts" };
+  }
+  return null;
+}
 
 function visibleShortcodes() {
   const codes = Array.from(document.querySelectorAll('a[href*="/p/"], a[href*="/reel/"]'))
@@ -163,16 +187,13 @@ function visibleShortcodes() {
   return [...new Set(codes)];
 }
 
-/** Ask how many of the not-yet-downloaded posts to fetch; null = cancelled/invalid. */
-function askCount(remaining, alreadyHave) {
-  const answer = window.prompt(
-    `${remaining} new post(s) to download (${alreadyHave} already downloaded).\nHow many? (blank = all)`,
-    String(remaining)
-  );
+/** Ask how many posts to fetch; null = cancelled/invalid. `blank` is what an empty answer means. */
+function askCount(message, suggestion) {
+  const answer = window.prompt(message, String(suggestion));
   if (answer === null) return null;
-  if (answer.trim() === "") return remaining;
+  if (answer.trim() === "") return suggestion;
   const n = parseInt(answer, 10);
-  return Number.isInteger(n) && n > 0 ? Math.min(n, remaining) : null;
+  return Number.isInteger(n) && n > 0 ? n : null;
 }
 
 function setBulk(btn, state, text, title = "") {
@@ -181,9 +202,23 @@ function setBulk(btn, state, text, title = "") {
   btn.title = title;
 }
 
-async function runBulk(btn) {
+function showResult(btn, res) {
+  if (!res?.ok) return setBulk(btn, "fail", "✕ Failed (hover)", res?.error || "Download failed");
+  const parts = [`${res.downloaded} saved`];
+  if (res.skipped) parts.push(`${res.skipped} already had`);
+  if (res.failed) parts.push(`${res.failed} failed`);
+  setBulk(btn, res.cancelled ? "idle" : "done", `${res.cancelled ? "■ Cancelled: " : "✓ "}${parts.join(", ")}`,
+    `Saved to ${res.target}`);
+}
+
+async function refreshBadges(codes) {
+  const res = await send({ type: "check", shortcodes: codes });
+  if (res?.ok) recordHave(res.downloaded);
+}
+
+async function runSavedBulk(btn) {
   const visible = visibleShortcodes();
-  if (!visible.length) return setBulk(btn, "idle", "⬇ Download all visible", "No posts found on this page");
+  if (!visible.length) return setBulk(btn, "idle", pageContext().label, "No posts found on this page");
 
   setBulk(btn, "busy", "… checking");
   const checked = await send({ type: "check", shortcodes: visible });
@@ -194,40 +229,77 @@ async function runBulk(btn) {
   const fresh = visible.filter((code) => !have.has(code));
   if (!fresh.length) return setBulk(btn, "done", `✓ All ${visible.length} already downloaded`);
 
-  const count = askCount(fresh.length, have.size);
-  if (count === null) return setBulk(btn, "idle", "⬇ Download all visible");
+  const count = askCount(
+    `${fresh.length} new post(s) to download (${have.size} already downloaded).\nHow many? (blank = all)`,
+    fresh.length);
+  if (count === null) return setBulk(btn, "idle", pageContext().label);
 
   const batch = fresh.slice(0, count);
-  setBulk(btn, "busy", `… downloading ${batch.length}`);
-  const res = await send({ type: "download-many", shortcodes: batch });
-  if (!res?.ok) return setBulk(btn, "fail", "✕ Failed (hover)", res?.error || "Download failed");
+  setBulk(btn, "busy", `… 0/${batch.length} · click to cancel`);
+  showResult(btn, await send({ type: "download-many", shortcodes: batch }));
+  refreshBadges(batch);
+}
 
-  const after = await send({ type: "check", shortcodes: batch });
-  if (after?.ok) recordHave(after.downloaded);
-  setBulk(btn, "done", `✓ ${res.downloaded}/${batch.length} saved`, `Saved to ${res.target}`);
+async function runPageBulk(btn, ctx) {
+  const count = askCount(
+    `Download the newest how many posts from ${ctx.display}?\n(Posts you already have are skipped.)`,
+    DEFAULT_PAGE_COUNT);
+  if (count === null) return;
+
+  setBulk(btn, "busy", `… 0/${count} · click to cancel`);
+  showResult(btn, await send({
+    type: "download-page", page_type: ctx.kind, identifier: ctx.identifier, count,
+  }));
+  refreshBadges(visibleShortcodes());
 }
 
 function makeBulkButton() {
   const btn = document.createElement("button");
   btn.type = "button";
   btn.className = "igdl-bulk";
-  btn.textContent = "⬇ Download all visible";
   btn.addEventListener("click", () => {
-    if (btn.dataset.state !== "busy") runBulk(btn);
+    if (btn.dataset.state === "busy") {
+      btn.textContent = "… cancelling";
+      send({ type: "cancel-batch" });
+      return;
+    }
+    const ctx = pageContext();
+    if (!ctx) return;
+    if (ctx.kind === "saved") runSavedBulk(btn);
+    else runPageBulk(btn, ctx);
   });
   return btn;
 }
 
+function resetBulk(ctx) {
+  bulk.dataset.page = `${ctx.kind}:${ctx.identifier ?? ""}`;
+  delete bulk.dataset.state;
+  bulk.textContent = ctx.label;
+  bulk.title = "";
+}
+
 function syncBulkButton() {
-  const onSaved = /\/saved(\/|$)/.test(location.pathname);
-  if (onSaved && !bulk) {
+  const ctx = pageContext();
+  if (ctx && !bulk) {
     bulk = makeBulkButton();
+    resetBulk(ctx);
     document.body.appendChild(bulk);
-  } else if (!onSaved && bulk) {
+  } else if (!ctx && bulk) {
     bulk.remove();
     bulk = null;
+  } else if (ctx && bulk.dataset.state !== "busy" && bulk.dataset.page !== `${ctx.kind}:${ctx.identifier ?? ""}`) {
+    resetBulk(ctx); // SPA navigation to a different page while idle: drop the old result text
   }
 }
+
+// Live progress from the server: counter on the pill, green outline on each tile as it lands.
+chrome.runtime.onMessage.addListener((msg) => {
+  if (msg?.type !== "progress") return;
+  if (msg.status === "downloaded" || msg.status === "skipped") recordHave([msg.shortcode]);
+  if (bulk?.dataset.state === "busy" && bulk.textContent !== "… cancelling") {
+    bulk.textContent = `… ${msg.processed}/${msg.total} · click to cancel`;
+  }
+});
 
 // ── Wiring ──────────────────────────────────────────────────────────────────
 

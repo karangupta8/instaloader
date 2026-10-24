@@ -16,6 +16,7 @@ import math
 import re
 import shutil
 import subprocess
+import sys
 from collections import defaultdict
 from dataclasses import dataclass
 from pathlib import Path
@@ -226,7 +227,8 @@ def _build_video_concat(slides: list[SlideInfo], out_path: Path, cell_size: int 
     for slide in slides:
         inputs += ["-i", str(slide.path)]
 
-    any_audio = any(_has_audio(slide.path) for slide in slides)
+    has_audio = [_has_audio(slide.path) for slide in slides]  # one ffprobe per slide
+    any_audio = any(has_audio)
 
     filter_parts: list[str] = []
     for i in range(n):
@@ -235,7 +237,7 @@ def _build_video_concat(slides: list[SlideInfo], out_path: Path, cell_size: int 
             f"pad={cell_size}:{cell_size}:(ow-iw)/2:(oh-ih)/2,fps=30,setsar=1[v{i}];"
         )
         if any_audio:
-            if _has_audio(slides[i].path):
+            if has_audio[i]:
                 filter_parts.append(
                     f"[{i}:a]aresample=44100,aformat=sample_fmts=fltp:channel_layouts=stereo[a{i}];"
                 )
@@ -354,6 +356,21 @@ def _delete_slides(slides: list[SlideInfo]) -> None:
             logger.warning(f"Could not delete slide {slide.path.name}: {exc}")
 
 
+def _retire_slides(slides: list[SlideInfo], *, keep_slides: bool, move_to: "Path | None") -> None:
+    """After the composite exists: keep the individual slides, move them to move_to, or delete them."""
+    if keep_slides:
+        return
+    if not move_to:
+        _delete_slides(slides)
+        return
+    move_to.mkdir(parents=True, exist_ok=True)
+    for slide in slides:
+        try:
+            shutil.move(str(slide.path), str(move_to / slide.path.name))
+        except OSError as exc:
+            logger.warning(f"Could not move slide {slide.path.name}: {exc}")
+
+
 def _rename_companion_txt(target_dir: Path, shortcode: str, composite_path: Path) -> None:
     matches = list(target_dir.glob(f"*_{shortcode}.txt"))
     if not matches:
@@ -421,16 +438,7 @@ def process_carousel_files(
                 return out_path
             try:
                 result = _build_image_collage(image_slides, out_path, cell_size)
-                if not keep_slides:
-                    if move_to:
-                        move_to.mkdir(parents=True, exist_ok=True)
-                        for s in image_slides:
-                            try:
-                                shutil.move(str(s.path), str(move_to / s.path.name))
-                            except OSError as exc:
-                                logger.warning(f"Could not move slide {s.path.name}: {exc}")
-                    else:
-                        _delete_slides(image_slides)
+                _retire_slides(image_slides, keep_slides=keep_slides, move_to=move_to)
                 _rename_companion_txt(target_dir, shortcode, result)
                 return _apply_graphic(result, make_graphic, delete_originals)
             except CarouselProcessingError as exc:
@@ -458,16 +466,7 @@ def process_carousel_files(
         max_dur = max(_get_video_duration(s.path) for s in slides if s.is_video)
         composite = _build_mixed_grid(slides, out_path_mp4, cell_size, max_dur=max_dur)
 
-    if not keep_slides:
-        if move_to:
-            move_to.mkdir(parents=True, exist_ok=True)
-            for slide in slides:
-                try:
-                    shutil.move(str(slide.path), str(move_to / slide.path.name))
-                except OSError as exc:
-                    logger.warning(f"Could not move slide {slide.path.name}: {exc}")
-        else:
-            _delete_slides(slides)
+    _retire_slides(slides, keep_slides=keep_slides, move_to=move_to)
     _rename_companion_txt(target_dir, shortcode, composite)
     return _apply_graphic(composite, make_graphic, delete_originals)
 
@@ -574,11 +573,52 @@ def process_carousel(
     )
 
 
+# ── Directory processing (used by the CLI below and by postprocess.py) ──────────
+
+def process_directory(
+    target_dir: Path,
+    *,
+    shortcode: "str | None" = None,
+    cell_size: int = 640,
+    make_collage: bool = True,
+    make_graphic: bool = True,
+    keep_slides: bool = False,
+    move_to: "Path | None" = None,
+    delete_originals: bool = False,
+) -> int:
+    """Build composites for every carousel (2+ slides sharing a shortcode) found in target_dir,
+    or just `shortcode`. Returns the number of carousels that failed. Raises KeyError if
+    `shortcode` was given but isn't there."""
+    carousels = _scan_directory_for_carousels(target_dir)
+    if shortcode:
+        if shortcode not in carousels:
+            raise KeyError(shortcode)
+        carousels = {shortcode: carousels[shortcode]}
+    if not carousels:
+        print("No carousels found (need 2+ slides with same shortcode).")
+        return 0
+
+    errors = 0
+    for code, slides in carousels.items():
+        owner_username = _extract_owner_username(code, slides)
+        print(f"  {code}  ({len(slides)} slides, @{owner_username})")
+        try:
+            result = process_carousel_files(
+                slides, code, owner_username, target_dir,
+                cell_size=cell_size, make_collage=make_collage, make_graphic=make_graphic,
+                keep_slides=keep_slides, move_to=move_to, delete_originals=delete_originals,
+            )
+            print(f"    -> {result.name}" if result else "    -> skipped")
+        except CarouselProcessingError as exc:
+            print(f"    ERROR: {exc}", file=sys.stderr)
+            errors += 1
+    return errors
+
+
 # ── Standalone CLI ─────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
     import argparse
-    import sys
 
     logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
 
@@ -615,35 +655,18 @@ if __name__ == "__main__":
         print(f"ERROR: {target_dir} is not a directory", file=sys.stderr)
         sys.exit(1)
 
-    carousels = _scan_directory_for_carousels(target_dir)
-
-    if args.shortcode:
-        if args.shortcode not in carousels:
-            print(f"ERROR: shortcode '{args.shortcode}' not found (or has < 2 slides)",
-                  file=sys.stderr)
-            sys.exit(1)
-        carousels = {args.shortcode: carousels[args.shortcode]}
-
-    if not carousels:
-        print("No carousels found (need 2+ slides with same shortcode).")
-        sys.exit(0)
-
-    for shortcode, slides in carousels.items():
-        owner_username = _extract_owner_username(shortcode, slides)
-        print(f"  {shortcode}  ({len(slides)} slides, @{owner_username})")
-        try:
-            result = process_carousel_files(
-                slides, shortcode, owner_username, target_dir,
-                cell_size=args.cell_size,
-                make_collage=not args.no_collage,
-                make_graphic=not args.no_graphic,
-                keep_slides=args.keep_slides,
-                move_to=move_to,
-                delete_originals=args.delete_originals,
-            )
-            if result:
-                print(f"    -> {result.name}")
-            else:
-                print(f"    -> skipped")
-        except CarouselProcessingError as exc:
-            print(f"    ERROR: {exc}", file=sys.stderr)
+    try:
+        errors = process_directory(
+            target_dir,
+            shortcode=args.shortcode,
+            cell_size=args.cell_size,
+            make_collage=not args.no_collage,
+            make_graphic=not args.no_graphic,
+            keep_slides=args.keep_slides,
+            move_to=move_to,
+            delete_originals=args.delete_originals,
+        )
+    except KeyError:
+        print(f"ERROR: shortcode '{args.shortcode}' not found (or has < 2 slides)", file=sys.stderr)
+        sys.exit(1)
+    sys.exit(1 if errors else 0)

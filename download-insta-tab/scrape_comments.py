@@ -17,7 +17,6 @@ import argparse
 import itertools
 import re
 import sys
-import urllib.parse
 from pathlib import Path
 from typing import Optional
 
@@ -25,6 +24,8 @@ from typing import Optional
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import instaloader
+
+import session
 
 SHORTCODE_RE = re.compile(r"instagram\.com/(?:p|reel)/([^/?#]+)")
 
@@ -34,27 +35,11 @@ def _extract_shortcode(value: str) -> str:
     return match.group(1) if match else value
 
 
-def _user_id_from_sessionid(sessionid: str) -> Optional[int]:
-    """Instagram's sessionid cookie is "<user_id>:<token>:<version>:<hash>" (colons may be
-    percent-encoded), so the numeric user id can be read straight out of it with no extra request."""
-    match = re.match(r"^(\d+)[:%]", urllib.parse.unquote(sessionid))
-    return int(match.group(1)) if match else None
-
-
 def _authenticate(loader: instaloader.Instaloader, sessionid: str, csrftoken: str) -> str:
-    loader.context.load_session("unknown", {"sessionid": sessionid, "csrftoken": csrftoken})
-    username = loader.test_login()
-    if not username:
-        raise SystemExit("Session cookies are invalid or expired. Re-copy them from DevTools and try again.")
-    loader.context.username = username
-    # login() normally sets this from Instagram's response; load_session() (raw cookies) doesn't,
-    # so the iPhone comments endpoint (used for posts with many comments) sends "ig-intended-user-id: None"
-    # and Instagram rejects it with a generic "fail" response. Parse it from the sessionid cookie instead
-    # of querying the profile endpoint, which is a separate call that gets rate-limited (429) quickly.
-    user_id = _user_id_from_sessionid(sessionid)
-    if user_id is None:
-        raise SystemExit("Could not parse a user id out of --sessionid; make sure you copied the full cookie value.")
-    loader.context.user_id = user_id
+    try:
+        username = session.authenticate(loader, sessionid, csrftoken)
+    except ValueError as exc:
+        raise SystemExit(str(exc))
     print(f"[scrape-comments] Authenticated as @{username}")
     return username
 
