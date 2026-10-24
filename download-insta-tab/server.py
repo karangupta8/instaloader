@@ -51,7 +51,11 @@ _skip_post_process: bool = False
 _skip_collage: bool = False
 _skip_graphic: bool = False
 _delete_originals: bool = False
-_credentials: tuple[str, str, str | None] | None = None  # (sessionid, csrftoken, user_agent)
+_credentials: tuple | None = None  # (sessionid, csrftoken, user_agent, client-header items)
+
+# Headers a real Chrome tab sends to www.instagram.com that python-requests doesn't.
+_CLIENT_HINT_KEYS = ("sec-ch-ua", "sec-ch-ua-mobile", "sec-ch-ua-platform", "accept-language")
+_SAME_ORIGIN_FETCH = {"sec-fetch-site": "same-origin", "sec-fetch-mode": "cors", "sec-fetch-dest": "empty"}
 
 # ── Rate-limit safety (on top of instaloader's own per-request sleeps and 429 backoff) ──
 _post_delay: tuple[float, float] = (3.0, 8.0)   # random pause between posts in a multi-post run
@@ -97,14 +101,46 @@ def _valid_user_agent(user_agent: object) -> bool:
             and len(user_agent) <= 300 and user_agent.isprintable())
 
 
-def _authenticate(sessionid: str, csrftoken: str, user_agent: str | None = None) -> str:
+def _clean_client_headers(raw: object) -> dict[str, str]:
+    """Keep only the whitelisted browser headers, with sane printable values."""
+    if not isinstance(raw, dict):
+        return {}
+    cleaned = {}
+    for key in _CLIENT_HINT_KEYS:
+        value = raw.get(key)
+        if isinstance(value, str) and value and len(value) <= 400 and value.isprintable():
+            cleaned[key] = value
+    return cleaned
+
+
+def _install_browser_headers(session, client_headers: dict[str, str]) -> None:
+    """Add Chrome's client hints + fetch-metadata headers to www.instagram.com requests.
+
+    Done per request (not as session defaults) so it never touches CDN downloads or the iPhone
+    API, which use their own sessions and must not look like a browser tab.
+    """
+    extra = {**_SAME_ORIGIN_FETCH, **client_headers}
+    original = session.prepare_request
+
+    def prepare_request(request):
+        prepared = original(request)
+        if urllib.parse.urlsplit(prepared.url).hostname == "www.instagram.com":
+            prepared.headers.update(extra)
+        return prepared
+
+    session.prepare_request = prepare_request
+
+
+def _authenticate(sessionid: str, csrftoken: str, user_agent: str | None = None,
+                  client_headers: dict[str, str] | None = None) -> str:
     """Build an instaloader session from cookie values.
 
-    user_agent, when given, is the real browser's UA so requests match the browser that owns the
-    session instead of instaloader's generic one. It must be set *before* load_session(), which
-    bakes the UA into the session headers.
+    user_agent / client_headers, when given, are the real browser's so requests match the browser
+    that owns the session instead of instaloader's generic ones. The UA must be set *before*
+    load_session(), which bakes it into the session headers.
     """
     global _authenticated, _credentials
+    client_headers = client_headers or {}
 
     cookies = {
         "sessionid": sessionid,
@@ -115,6 +151,8 @@ def _authenticate(sessionid: str, csrftoken: str, user_agent: str | None = None)
     if user_agent:
         _loader.context.user_agent = user_agent
     _loader.context.load_session("unknown", cookies)
+    # No public API for per-request headers; the context's session is what load_session() just built.
+    _install_browser_headers(_loader.context._session, client_headers)  # pylint: disable=protected-access
 
     test_user = _loader.test_login()
     if not test_user:
@@ -130,7 +168,7 @@ def _authenticate(sessionid: str, csrftoken: str, user_agent: str | None = None)
         raise ValueError("Could not parse a user id out of --sessionid; make sure you copied the full cookie value.")
     _loader.context.user_id = user_id
     _authenticated = True
-    _credentials = (sessionid, csrftoken, user_agent)
+    _credentials = (sessionid, csrftoken, user_agent, tuple(sorted(client_headers.items())))
     print(f"[ig-dl] Authenticated as @{test_user}")
     return test_user
 
@@ -449,12 +487,15 @@ async def handle_client(websocket):
             if not _valid_user_agent(user_agent):
                 user_agent = None  # keep instaloader's default rather than send something odd
 
+            client_headers = _clean_client_headers(msg.get("client_headers"))
+            key = (sessionid, csrftoken, user_agent, tuple(sorted(client_headers.items())))
+
             def do_auth():
                 with _work_lock:
-                    # Same cookies + UA => already authenticated; avoids a needless Instagram call.
-                    if _authenticated and _credentials == (sessionid, csrftoken, user_agent):
+                    # Same cookies + browser identity => already authenticated; skips an Instagram call.
+                    if _authenticated and _credentials == key:
                         return _loader.context.username
-                    return _authenticate(sessionid, csrftoken, user_agent)
+                    return _authenticate(sessionid, csrftoken, user_agent, client_headers)
 
             try:
                 user = await asyncio.get_event_loop().run_in_executor(None, do_auth)

@@ -15,14 +15,35 @@ async function getCookie(name) {
   return all.length ? all[0].value : null;
 }
 
+/** The identity headers Chrome itself would send (client hints + Accept-Language). */
+function getClientHeaders() {
+  const headers = {};
+  const uaData = navigator.userAgentData;
+  if (uaData) {
+    headers["sec-ch-ua"] = uaData.brands.map((b) => `"${b.brand}";v="${b.version}"`).join(", ");
+    headers["sec-ch-ua-mobile"] = uaData.mobile ? "?1" : "?0";
+    headers["sec-ch-ua-platform"] = `"${uaData.platform}"`;
+  }
+  if (navigator.languages?.length) {
+    headers["accept-language"] = navigator.languages
+      .map((lang, i) => (i === 0 ? lang : `${lang};q=${Math.max(0.1, 1 - i * 0.1).toFixed(1)}`))
+      .join(",");
+  }
+  return headers;
+}
+
 async function getAuthPayload() {
   const [sessionid, csrftoken] = await Promise.all([getCookie("sessionid"), getCookie("csrftoken")]);
   if (!sessionid || !csrftoken) {
     const missing = [!sessionid && "sessionid", !csrftoken && "csrftoken"].filter(Boolean).join(", ");
     throw new Error(`Missing Instagram cookie(s): ${missing}. Log in to instagram.com in this Chrome profile.`);
   }
-  // Send the browser's own UA so the server's requests match the browser that owns this session.
-  return { type: "auth", sessionid, csrftoken, user_agent: navigator.userAgent };
+  // Send the browser's own identity so the server's requests match the browser that owns this session.
+  return {
+    type: "auth", sessionid, csrftoken,
+    user_agent: navigator.userAgent,
+    client_headers: getClientHeaders(),
+  };
 }
 
 /** Send `steps` in order over a fresh socket; each step waits for the server's reply.
