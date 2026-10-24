@@ -96,6 +96,8 @@ and overlays a download button on every post, reel and saved-grid tile.
 - **Download all visible** (saved pages): checks what's new, then asks how many to download (blank = all).
 - **Toolbar icon:** badge shows `ON` (server up, logged in), `OFF` (server not running) or `!` (not logged in); click it for details.
 
+The extension also sends Chrome's real user-agent, so the server's requests match the browser that owns the session instead of instaloader's generic Linux one.
+
 Fresh cookies are sent on every click, so a refreshed or re-logged-in session just works.
 The server only accepts WebSocket connections from `chrome-extension://` and `https://www.instagram.com` origins.
 

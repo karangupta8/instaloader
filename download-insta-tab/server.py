@@ -51,7 +51,7 @@ _skip_post_process: bool = False
 _skip_collage: bool = False
 _skip_graphic: bool = False
 _delete_originals: bool = False
-_credentials: tuple[str, str] | None = None
+_credentials: tuple[str, str, str | None] | None = None  # (sessionid, csrftoken, user_agent)
 
 # ── Rate-limit safety (on top of instaloader's own per-request sleeps and 429 backoff) ──
 _post_delay: tuple[float, float] = (3.0, 8.0)   # random pause between posts in a multi-post run
@@ -91,8 +91,19 @@ def _user_id_from_sessionid(sessionid: str) -> int | None:
     return int(match.group(1)) if match else None
 
 
-def _authenticate(sessionid: str, csrftoken: str) -> str:
-    """Build an instaloader session from cookie values."""
+def _valid_user_agent(user_agent: object) -> bool:
+    """Accept only a plain browser-looking UA string (it ends up in an HTTP header)."""
+    return (isinstance(user_agent, str) and user_agent.startswith("Mozilla/5.0")
+            and len(user_agent) <= 300 and user_agent.isprintable())
+
+
+def _authenticate(sessionid: str, csrftoken: str, user_agent: str | None = None) -> str:
+    """Build an instaloader session from cookie values.
+
+    user_agent, when given, is the real browser's UA so requests match the browser that owns the
+    session instead of instaloader's generic one. It must be set *before* load_session(), which
+    bakes the UA into the session headers.
+    """
     global _authenticated, _credentials
 
     cookies = {
@@ -101,6 +112,8 @@ def _authenticate(sessionid: str, csrftoken: str) -> str:
     }
 
     _authenticated = False
+    if user_agent:
+        _loader.context.user_agent = user_agent
     _loader.context.load_session("unknown", cookies)
 
     test_user = _loader.test_login()
@@ -117,7 +130,7 @@ def _authenticate(sessionid: str, csrftoken: str) -> str:
         raise ValueError("Could not parse a user id out of --sessionid; make sure you copied the full cookie value.")
     _loader.context.user_id = user_id
     _authenticated = True
-    _credentials = (sessionid, csrftoken)
+    _credentials = (sessionid, csrftoken, user_agent)
     print(f"[ig-dl] Authenticated as @{test_user}")
     return test_user
 
@@ -432,11 +445,16 @@ async def handle_client(websocket):
                 await send({"type": "error", "error": "auth needs sessionid and csrftoken"})
                 continue
 
+            user_agent = msg.get("user_agent")
+            if not _valid_user_agent(user_agent):
+                user_agent = None  # keep instaloader's default rather than send something odd
+
             def do_auth():
                 with _work_lock:
-                    if _authenticated and _credentials == (sessionid, csrftoken):
+                    # Same cookies + UA => already authenticated; avoids a needless Instagram call.
+                    if _authenticated and _credentials == (sessionid, csrftoken, user_agent):
                         return _loader.context.username
-                    return _authenticate(sessionid, csrftoken)
+                    return _authenticate(sessionid, csrftoken, user_agent)
 
             try:
                 user = await asyncio.get_event_loop().run_in_executor(None, do_auth)

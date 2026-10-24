@@ -21,7 +21,8 @@ async function getAuthPayload() {
     const missing = [!sessionid && "sessionid", !csrftoken && "csrftoken"].filter(Boolean).join(", ");
     throw new Error(`Missing Instagram cookie(s): ${missing}. Log in to instagram.com in this Chrome profile.`);
   }
-  return { type: "auth", sessionid, csrftoken };
+  // Send the browser's own UA so the server's requests match the browser that owns this session.
+  return { type: "auth", sessionid, csrftoken, user_agent: navigator.userAgent };
 }
 
 /** Send `steps` in order over a fresh socket; each step waits for the server's reply.
